@@ -4,6 +4,8 @@ Manifest V3 extension for using a self-hosted Frank Yomik server from desktop Ch
 
 The extension intentionally keeps Kindle and Naver pages close to vanilla: it does not add in-page buttons, panels, HUDs, or settings overlays. Controls live in the extension popup/options page. Content scripts only detect/capture page images and replace the page image after a translated result is ready.
 
+![Kindle page translated by the Chromium extension](docs/kindle-extension-translation.png)
+
 ## Supported sites
 
 - Kindle Japan reader:
@@ -28,6 +30,19 @@ The extension intentionally keeps Kindle and Naver pages close to vanilla: it do
 8. Click **Check server**.
 9. Reload any Kindle/Naver tabs that were already open before installing or updating the extension.
 
+For normal development updates, use the reload button on the existing extension card. Removing and re-adding the unpacked extension can clear Chromium extension storage. Use **Export settings** first if you want a backup of the API URL/token.
+
+## Packaged zip
+
+Create a distributable zip from this directory:
+
+```bash
+cd extension
+npm run package
+```
+
+The output lands in `extension/dist/frank-yomik-extension-<version>.zip`. Unzip it into a dedicated directory, then load that directory from `chrome://extensions` with Developer mode enabled.
+
 ## Development checks
 
 ```bash
@@ -35,7 +50,7 @@ cd extension
 npm test
 ```
 
-This validates the manifest, security guardrails, and JavaScript syntax. There is no build step.
+This validates the manifest, security guardrails, JavaScript syntax, and unit-tested pure helper modules.
 
 ## Runtime model
 
@@ -58,6 +73,8 @@ This validates the manifest, security guardrails, and JavaScript syntax. There i
 
 The popup contains a small diagnostics section. If a page is not translating, open the extension popup on that tab and check whether it reports strategy startup, page detection, queued jobs, or errors.
 
+The popup also has **Export settings** and **Import settings** actions. The export file contains the auth token, so keep it private.
+
 ## Security notes
 
 - The bearer token is never sent to content scripts.
@@ -67,6 +84,7 @@ The popup contains a small diagnostics section. If a page is not translating, op
 - Result image downloads are rejected unless they resolve to the configured API origin.
 - Webtoon background image fetching is limited to exact pstatic image hosts and never sends the bearer token.
 - Prefer HTTPS for the server. Plain HTTP on a trusted LAN can work, but exposes page images and the token to network observers.
+- Extension icons are generated from the Android launcher artwork under `client/android/app/src/main/res/`.
 
 ## Current limitations
 

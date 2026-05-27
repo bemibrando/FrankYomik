@@ -3,6 +3,15 @@
 
   if (window.FrankOverlay) return;
 
+  const MIN_PAGE_SIDE_PX = 100;
+  const MIN_VISIBLE_OVERLAP_PX2 = 2000;
+  const EXACT_SOURCE_SCORE = 2_000_000_000;
+  const SAME_TRANSLATED_PAGE_SCORE = 1_000_000_000;
+  const TOP_LAYER_HIT_SCORE = 100_000_000;
+  const RECT_CENTER_PENALTY = 800;
+  const RECT_SIZE_PENALTY = 500_000;
+  const COMPOSITOR_NUDGE_OPACITY = '0.999';
+
   const objectUrls = new Set();
 
   window.addEventListener('pagehide', () => {
@@ -59,20 +68,20 @@
         continue;
       }
       const rect = img.getBoundingClientRect();
-      if (rect.width < 100 || rect.height < 100) continue;
+      if (rect.width < MIN_PAGE_SIDE_PX || rect.height < MIN_PAGE_SIDE_PX) continue;
       let overlap = overlapAreaInViewport(rect, vw, vh);
-      if (overlap < 2000) continue;
+      if (overlap < MIN_VISIBLE_OVERLAP_PX2) continue;
       if (rootRect && readerRoot !== document.body) {
         const rootOverlap = overlapArea(rect, rootRect);
-        if (rootOverlap < 2000) continue;
+        if (rootOverlap < MIN_VISIBLE_OVERLAP_PX2) continue;
         overlap = Math.min(overlap, rootOverlap);
       }
       if (!isActuallyVisible(img)) continue;
 
       if (expected && img.src !== expected && img.dataset.frankTranslated !== 'true') continue;
-      const exact = expected && img.src === expected ? 2_000_000_000 : 0;
-      const alreadyTranslated = img.dataset.frankTranslated === 'true' ? 1_000_000_000 : 0;
-      const score = exact + alreadyTranslated + (topLayerHits(img) * 100_000_000) + overlap + rectBiasScore(rect, expectedRect);
+      const exact = expected && img.src === expected ? EXACT_SOURCE_SCORE : 0;
+      const alreadyTranslated = img.dataset.frankTranslated === 'true' ? SAME_TRANSLATED_PAGE_SCORE : 0;
+      const score = exact + alreadyTranslated + (topLayerHits(img) * TOP_LAYER_HIT_SCORE) + overlap + rectBiasScore(rect, expectedRect);
       if (score > bestScore) {
         bestScore = score;
         best = img;
@@ -157,7 +166,7 @@
     const cy = rect.top + rect.height / 2;
     const centerDist = Math.hypot(cx - ecx, cy - ecy);
     const sizeErr = Math.abs(rect.width - ew) / ew + Math.abs(rect.height - eh) / eh;
-    return -((centerDist * 800) + (sizeErr * 500_000));
+    return -((centerDist * RECT_CENTER_PENALTY) + (sizeErr * RECT_SIZE_PENALTY));
   }
 
   function overlapAreaInViewport(rect, vw, vh) {
@@ -181,7 +190,7 @@
   }
 
   function nudgeCompositor(img) {
-    img.style.opacity = '0.999';
+    img.style.opacity = COMPOSITOR_NUDGE_OPACITY;
     void img.offsetWidth;
     img.style.opacity = '';
   }

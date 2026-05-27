@@ -79,3 +79,19 @@ jobs:
       - name: Run Go tests
         working-directory: server
         run: go test -v .
+
+  extension-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run extension tests
+        working-directory: extension
+        run: npm test

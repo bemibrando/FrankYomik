@@ -13,6 +13,12 @@ const expectedMatches = new Set([
   'https://comic.naver.com/*',
   'https://m.comic.naver.com/*',
 ]);
+const expectedIconPaths = [
+  'assets/icons/icon-16.png',
+  'assets/icons/icon-32.png',
+  'assets/icons/icon-48.png',
+  'assets/icons/icon-128.png',
+];
 
 function fail(message) {
   errors.push(message);
@@ -21,20 +27,31 @@ function fail(message) {
 if (manifest.manifest_version !== 3) fail('manifest_version must be 3');
 if (!manifest.background?.service_worker) fail('background service_worker is required');
 if (manifest.background?.type !== 'module') fail('background service_worker should be a module');
-if (!Array.isArray(manifest.content_scripts) || manifest.content_scripts.length !== 1) {
-  fail('exactly one bootstrap content script declaration is expected');
+if (!Array.isArray(manifest.content_scripts) || manifest.content_scripts.length !== 2) {
+  fail('two scoped content script declarations are expected: Kindle and Naver Webtoon');
 }
 
-const contentScript = manifest.content_scripts?.[0];
-if (contentScript) {
+const contentScripts = manifest.content_scripts ?? [];
+const kindleScript = contentScripts.find((script) => script.matches?.includes('https://read.amazon.co.jp/*'));
+const webtoonScript = contentScripts.find((script) => script.matches?.includes('https://comic.naver.com/*'));
+if (!kindleScript) fail('missing Kindle content script declaration');
+if (!webtoonScript) fail('missing Naver Webtoon content script declaration');
+
+for (const contentScript of contentScripts) {
   for (const match of expectedMatches) {
-    if (!contentScript.matches?.includes(match)) fail(`missing content script match: ${match}`);
+    // Each expected match should be covered by one declaration, not all declarations.
+    if (!contentScripts.some((script) => script.matches?.includes(match))) fail(`missing content script match: ${match}`);
   }
   for (const match of contentScript.matches ?? []) {
     if (!expectedMatches.has(match)) fail(`unexpected content script match: ${match}`);
   }
-  if (contentScript.all_frames !== true) fail('content script must run in all frames for Kindle reader iframes');
 }
+if (kindleScript && kindleScript.all_frames !== true) fail('Kindle content script must run in all frames for reader iframes');
+if (webtoonScript && webtoonScript.all_frames === true) fail('Webtoon content script should not run in all frames');
+if (kindleScript && !kindleScript.js?.includes('src/content/kindle.js')) fail('Kindle declaration must include kindle.js');
+if (kindleScript && kindleScript.js?.includes('src/content/webtoon.js')) fail('Kindle declaration must not include webtoon.js');
+if (webtoonScript && !webtoonScript.js?.includes('src/content/webtoon.js')) fail('Webtoon declaration must include webtoon.js');
+if (webtoonScript && webtoonScript.js?.includes('src/content/kindle.js')) fail('Webtoon declaration must not include kindle.js');
 
 const forbiddenPermissions = new Set(['tabs', 'webRequest', 'webRequestBlocking', '<all_urls>']);
 const allowedHostPermissions = new Set([
@@ -55,7 +72,8 @@ for (const resource of manifest.web_accessible_resources ?? []) {
 const requiredFiles = [
   manifest.background.service_worker,
   manifest.options_page,
-  ...(contentScript?.js ?? []),
+  ...new Set(contentScripts.flatMap((script) => script.js ?? [])),
+  ...expectedIconPaths,
 ];
 for (const rel of requiredFiles) {
   if (!fs.existsSync(path.join(root, rel))) fail(`referenced file does not exist: ${rel}`);
@@ -69,7 +87,7 @@ if (serviceWorker.includes('chrome.permissions.request')) {
   fail('service worker must not request permissions outside an options-page user gesture');
 }
 
-for (const rel of contentScript?.js ?? []) {
+for (const rel of new Set(contentScripts.flatMap((script) => script.js ?? []))) {
   const source = fs.readFileSync(path.join(root, rel), 'utf8');
   if (source.includes('authToken')) fail(`content script must not reference authToken: ${rel}`);
   if (source.includes('frank-yomik-hud') || source.includes('showStatus')) {

@@ -59,3 +59,6 @@ server/tests/ab_*_results.json
 
 # Local tool artifacts
 .ai-jail
+
+# Extension packaged artifacts
+extension/dist/

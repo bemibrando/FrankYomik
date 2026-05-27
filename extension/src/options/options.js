@@ -36,6 +36,11 @@ document.querySelector('#health-check').addEventListener('click', async () => {
 });
 
 document.querySelector('#refresh-diagnostics').addEventListener('click', refreshDiagnostics);
+document.querySelector('#export-settings').addEventListener('click', exportSettings);
+document.querySelector('#import-settings').addEventListener('click', () => {
+  document.querySelector('#import-settings-file').click();
+});
+document.querySelector('#import-settings-file').addEventListener('change', importSettingsFile);
 
 async function loadSettings() {
   const response = await sendMessage({ type: 'GET_SETTINGS' });
@@ -59,6 +64,31 @@ async function saveSettings() {
   applySettings(response.settings || {});
   setStatus('Saved.', 'ok');
   await refreshDiagnostics();
+}
+
+function exportSettings() {
+  const settings = readSettings();
+  const blob = new Blob([`${JSON.stringify(settings, null, 2)}\n`], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'frank-yomik-extension-settings.json';
+  link.click();
+  URL.revokeObjectURL(url);
+  setStatus('Settings exported. Keep the file private because it contains the auth token.', 'ok');
+}
+
+async function importSettingsFile(event) {
+  const file = event.target.files?.[0];
+  event.target.value = '';
+  if (!file) return;
+  try {
+    const imported = JSON.parse(await file.text());
+    applySettings(imported);
+    await saveSettings();
+  } catch (error) {
+    setStatus(`Import failed: ${error.message || error}`, 'error');
+  }
 }
 
 function applySettings(settings) {

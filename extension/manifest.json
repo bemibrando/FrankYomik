@@ -3,9 +3,21 @@
   "name": "Frank Yomik",
   "version": "0.1.0",
   "description": "Translate Kindle and Naver Webtoon pages through a self-hosted Frank Yomik server.",
+  "icons": {
+    "16": "assets/icons/icon-16.png",
+    "32": "assets/icons/icon-32.png",
+    "48": "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png"
+  },
   "action": {
     "default_title": "Frank Yomik",
-    "default_popup": "src/options/options.html"
+    "default_popup": "src/options/options.html",
+    "default_icon": {
+      "16": "assets/icons/icon-16.png",
+      "32": "assets/icons/icon-32.png",
+      "48": "assets/icons/icon-48.png",
+      "128": "assets/icons/icon-128.png"
+    }
   },
   "options_page": "src/options/options.html",
   "permissions": [
@@ -29,17 +41,26 @@
     {
       "matches": [
         "https://read.amazon.co.jp/*",
-        "https://read.kindle.co.jp/*",
+        "https://read.kindle.co.jp/*"
+      ],
+      "js": [
+        "src/content/overlay.js",
+        "src/content/kindle.js",
+        "src/content/bootstrap.js"
+      ],
+      "all_frames": true,
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "https://comic.naver.com/*",
         "https://m.comic.naver.com/*"
       ],
       "js": [
         "src/content/overlay.js",
-        "src/content/kindle.js",
         "src/content/webtoon.js",
         "src/content/bootstrap.js"
       ],
-      "all_frames": true,
       "run_at": "document_idle"
     }
   ]

@@ -6,6 +6,15 @@
   const SPREAD_THRESHOLD = 1.3;
   const DETECT_INTERVAL_MS = 450;
   const MAX_CAPTURE_SIDE = 2200;
+  const RECENT_USER_NAV_MS = 4000;
+  const REPAINT_GEOMETRY_TOLERANCE = 0.02;
+  const REPAINT_SUPPRESS_MS = 600;
+  const QUEUED_DETECTION_DELAY_MS = 250;
+  const REAPPLY_DELAYS_MS = [800, 1800, 3500];
+  const MIN_PAGE_SIDE_PX = 100;
+  const MIN_VISIBLE_OVERLAP_PX2 = 2000;
+  const LOADER_VISIBLE_OVERLAP_PX2 = 1600;
+  const NO_TARGET_REPORT_INTERVAL_MS = 15000;
 
   let started = false;
   let settings = {};
@@ -83,11 +92,11 @@
 
     const rect = target.getBoundingClientRect();
     const now = Date.now();
-    const userNavRecent = now - userNavAt < 4000;
+    const userNavRecent = now - userNavAt < RECENT_USER_NAV_MS;
     if (!userNavRecent && lastRect) {
       const dw = Math.abs(rect.width - lastRect.width) / Math.max(1, lastRect.width);
       const dh = Math.abs(rect.height - lastRect.height) / Math.max(1, lastRect.height);
-      if (dw < 0.02 && dh < 0.02 && now - lastEmitAt < 600) return;
+      if (dw < REPAINT_GEOMETRY_TOLERANCE && dh < REPAINT_GEOMETRY_TOLERANCE && now - lastEmitAt < REPAINT_SUPPRESS_MS) return;
     }
 
     lastBlob = blobSrc;
@@ -125,7 +134,7 @@
       if (activeGroups === 0 && queuedDetection) {
         const next = queuedDetection;
         queuedDetection = null;
-        window.setTimeout(() => scheduleSubmit(next), 250);
+        window.setTimeout(() => scheduleSubmit(next), QUEUED_DETECTION_DELAY_MS);
       }
     });
   }
@@ -236,7 +245,7 @@
     const ok = await window.FrankOverlay?.applyKindleResult(message);
     if (ok) {
       report('info', `Kindle translated image applied: ${message.pageId || 'unknown page'}`);
-      for (const delay of [800, 1800, 3500]) {
+      for (const delay of REAPPLY_DELAYS_MS) {
         window.setTimeout(() => window.FrankOverlay?.applyKindleResult(message), delay);
       }
     }
@@ -249,7 +258,7 @@
     if (activeGroups === 0 && queuedDetection) {
       const next = queuedDetection;
       queuedDetection = null;
-      window.setTimeout(() => scheduleSubmit(next), 250);
+      window.setTimeout(() => scheduleSubmit(next), QUEUED_DETECTION_DELAY_MS);
     }
   }
 
@@ -322,12 +331,12 @@
       if (img.dataset.frankTranslated === 'true') continue;
       if (!img.src?.startsWith('blob:')) continue;
       const rect = img.getBoundingClientRect();
-      if (rect.width < 100 || rect.height < 100) continue;
+      if (rect.width < MIN_PAGE_SIDE_PX || rect.height < MIN_PAGE_SIDE_PX) continue;
       let overlap = overlapAreaInViewport(rect, vw, vh);
-      if (overlap < 2000) continue;
+      if (overlap < MIN_VISIBLE_OVERLAP_PX2) continue;
       if (rootRect && root !== document.body) {
         const rootOverlap = overlapArea(rect, rootRect);
-        if (rootOverlap < 2000) continue;
+        if (rootOverlap < MIN_VISIBLE_OVERLAP_PX2) continue;
         overlap = Math.min(overlap, rootOverlap);
       }
       if (overlap > bestArea) {
@@ -359,7 +368,7 @@
       if (Number.isFinite(opacity) && opacity <= 0.05) continue;
       const rect = el.getBoundingClientRect();
       const overlap = overlapAreaInViewport(rect, window.innerWidth, window.innerHeight);
-      if (overlap > 1600) return true;
+      if (overlap > LOADER_VISIBLE_OVERLAP_PX2) return true;
     }
     return false;
   }
@@ -399,7 +408,7 @@
 
   function reportNoTarget() {
     const now = Date.now();
-    if (now - lastNoTargetReportAt < 15000) return;
+    if (now - lastNoTargetReportAt < NO_TARGET_REPORT_INTERVAL_MS) return;
     lastNoTargetReportAt = now;
     report('info', 'Kindle detector is running, but no visible blob page image was found yet');
   }

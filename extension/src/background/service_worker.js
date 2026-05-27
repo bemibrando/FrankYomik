@@ -8,16 +8,20 @@ import {
   apiOriginPattern,
   normalizeSettings,
 } from '../shared/config.js';
+import {
+  SIZE_LIMITS,
+  TIMING,
+  cacheKeyFor,
+  formatBytes,
+  normalizeApiImageUrl,
+  safeText,
+  sanitizeCapture,
+  sanitizeMetadata,
+  validateAllowedWebtoonImageUrl,
+} from '../shared/policy.js';
 
 const POLL_ALARM_NAME = 'frankPollJobsSoon';
 const POLL_FALLBACK_ALARM_NAME = 'frankPollJobsFallback';
-const POLL_DELAY_MS = 3_000;
-const JOB_TIMEOUT_MS = 5 * 60_000;
-const MAX_CACHE_ENTRIES = 200;
-const MAX_CAPTURE_DATA_URL_BYTES = 28 * 1024 * 1024;
-const MAX_RESULT_IMAGE_BYTES = 25 * 1024 * 1024;
-const MAX_CACHE_BYTES = 200 * 1024 * 1024;
-const MAX_DIAGNOSTICS = 80;
 const DB_NAME = 'frank-yomik-extension';
 const DB_VERSION = 1;
 const IMAGE_STORE = 'images';
@@ -122,7 +126,7 @@ async function checkHealth() {
   const response = await fetchWithTimeout(`${settings.apiBaseUrl}/api/v1/health`, {
     method: 'GET',
     cache: 'no-store',
-  }, 10_000);
+  }, TIMING.healthTimeoutMs);
   if (!response.ok) throw new Error(`health check failed: HTTP ${response.status}`);
   return { ok: true, health: await response.json() };
 }
@@ -141,7 +145,7 @@ async function submitCapture(message, sender) {
   if (!dataUrl.startsWith('data:image/png;base64,') && !dataUrl.startsWith('data:image/jpeg;base64,')) {
     throw new Error('capture must be a PNG or JPEG data URL');
   }
-  if (dataUrl.length > MAX_CAPTURE_DATA_URL_BYTES) throw new Error('capture is too large');
+  if (dataUrl.length > SIZE_LIMITS.maxCaptureDataUrlChars) throw new Error('capture is too large');
   await recordEvent({ site, level: 'info', message: `Received ${site} capture ${pageId} (${formatBytes(dataUrl.length)})` });
 
   const image = await dataUrlToBlobAndBytes(dataUrl);
@@ -243,10 +247,10 @@ async function fetchWebtoonImage(message, sender) {
     cache: 'force-cache',
     credentials: 'omit',
     redirect: 'error',
-  }, 30_000);
+  }, TIMING.webtoonFetchTimeoutMs);
   if (!response.ok) throw new Error(`image fetch failed: HTTP ${response.status}`);
   const blob = await response.blob();
-  if (blob.size > MAX_CAPTURE_DATA_URL_BYTES) throw new Error('webtoon source image is too large');
+  if (blob.size > SIZE_LIMITS.maxCaptureDataUrlChars) throw new Error('webtoon source image is too large');
   if (blob.type && !blob.type.startsWith('image/')) throw new Error(`unexpected image type: ${blob.type}`);
   return { ok: true, imageDataUrl: await blobToDataUrl(blob) };
 }
@@ -259,23 +263,6 @@ async function reportEvent(message, sender) {
     message: safeText(message.message, 300),
   });
   return { ok: true };
-}
-
-function validateAllowedWebtoonImageUrl(value) {
-  let url;
-  try {
-    url = new URL(String(value || ''));
-  } catch {
-    throw new Error('invalid webtoon image URL');
-  }
-  const allowedHosts = new Set([
-    'image-comic.pstatic.net',
-    'webtoon-phinf.pstatic.net',
-    'swebtoon-phinf.pstatic.net',
-  ]);
-  if (url.protocol !== 'https:') throw new Error('webtoon image URL must use https');
-  if (!allowedHosts.has(url.hostname.toLowerCase())) throw new Error('webtoon image host is not allowed');
-  return url;
 }
 
 async function recordMessageError(message, sender, error) {
@@ -359,7 +346,7 @@ async function submitJob(settings, imageBlob, options) {
       method: 'POST',
       headers: authHeaders(settings),
       body: form,
-    }, 30_000);
+    }, TIMING.submitTimeoutMs);
     const text = await response.text();
     if (response.status !== 201) {
       throw retryableError(`submit failed: HTTP ${response.status} ${text}`, response.status >= 500);
@@ -374,7 +361,7 @@ async function getJobStatus(settings, jobId) {
       method: 'GET',
       headers: authHeaders(settings),
       cache: 'no-store',
-    }, 10_000);
+    }, TIMING.statusTimeoutMs);
     if (!response.ok) throw retryableError(`status failed: HTTP ${response.status}`, response.status >= 500);
     return response.json();
   });
@@ -388,22 +375,13 @@ async function downloadImageDataUrl(settings, imageUrl) {
       headers: authHeaders(settings),
       cache: 'no-store',
       redirect: 'error',
-    }, 45_000);
+    }, TIMING.imageDownloadTimeoutMs);
     if (!response.ok) throw retryableError(`image download failed: HTTP ${response.status}`, response.status >= 500);
     const blob = await response.blob();
-    if (blob.size > MAX_RESULT_IMAGE_BYTES) throw new Error('translated image is too large');
+    if (blob.size > SIZE_LIMITS.maxResultImageBytes) throw new Error('translated image is too large');
     if (blob.type && !blob.type.startsWith('image/')) throw new Error(`translated result is not an image: ${blob.type}`);
     return blobToDataUrl(blob);
   });
-}
-
-function normalizeApiImageUrl(settings, imageUrl) {
-  const api = new URL(settings.apiBaseUrl);
-  const resolved = imageUrl.startsWith('http') ? new URL(imageUrl) : new URL(imageUrl, settings.apiBaseUrl);
-  if (resolved.origin !== api.origin) {
-    throw new Error('refusing to download cross-origin result image');
-  }
-  return resolved.toString();
 }
 
 async function pollActiveJobs() {
@@ -417,7 +395,7 @@ async function pollActiveJobs() {
   await recordEvent({ site: 'extension', level: 'info', message: `Polling ${entries.length} active job(s)` });
   for (const job of entries) {
     const recordId = job.recordId || job.jobId;
-    if (Date.now() - job.submittedAt > JOB_TIMEOUT_MS) {
+    if (Date.now() - job.submittedAt > TIMING.jobTimeoutMs) {
       delete jobs[recordId];
       changed = true;
       await notifyTab(job, { type: 'FRANK_JOB_FAILED', pageId: job.pageId, jobId: job.jobId, error: 'Job timed out' });
@@ -489,11 +467,11 @@ function ensurePollingAlarm() {
 
 function schedulePollSoon() {
   if (pollTimer) clearTimeout(pollTimer);
-  chrome.alarms.create(POLL_ALARM_NAME, { when: Date.now() + POLL_DELAY_MS });
+  chrome.alarms.create(POLL_ALARM_NAME, { when: Date.now() + TIMING.pollDelayMs });
   pollTimer = setTimeout(() => {
     pollTimer = null;
     pollActiveJobs().catch((error) => console.warn('[Frank] scheduled poll failed:', error));
-  }, POLL_DELAY_MS);
+  }, TIMING.pollDelayMs);
   ensurePollingAlarm();
 }
 
@@ -521,7 +499,7 @@ async function recordEvent(event) {
     level: event.level === 'error' ? 'error' : 'info',
     message: safeText(event.message, 300),
   });
-  await chrome.storage.local.set({ [STORAGE_KEYS.diagnostics]: diagnostics.slice(0, MAX_DIAGNOSTICS) });
+  await chrome.storage.local.set({ [STORAGE_KEYS.diagnostics]: diagnostics.slice(0, SIZE_LIMITS.maxDiagnostics) });
 }
 
 function authHeaders(settings) {
@@ -581,66 +559,6 @@ async function sha256Hex(arrayBuffer) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
-function cacheKeyFor(apiBaseUrl, cachePipeline, sourceHash) {
-  const origin = new URL(apiBaseUrl).origin;
-  return `${origin}|${cachePipeline}|${sourceHash}`;
-}
-
-function sanitizeMetadata(metadata, fallbackUrl) {
-  return {
-    title: safeText(metadata.title, 120),
-    chapter: safeText(metadata.chapter, 60),
-    page_number: safeText(metadata.pageNumber || metadata.page_number, 60),
-    source_url: safeUrl(metadata.sourceUrl || metadata.source_url || fallbackUrl),
-  };
-}
-
-function sanitizeCapture(capture = {}) {
-  if (!capture || typeof capture !== 'object') return {};
-  const rect = capture.rect && typeof capture.rect === 'object' ? capture.rect : capture.readerRect;
-  return {
-    imgSrc: safeText(capture.imgSrc, 2048),
-    originalSrc: safeText(capture.originalSrc, 2048),
-    groupId: safeText(capture.groupId, 160),
-    side: capture.side === 'left' || capture.side === 'right' ? capture.side : undefined,
-    index: Number.isFinite(Number(capture.index)) ? Number(capture.index) : undefined,
-    pageMode: capture.pageMode === 'spread' ? 'spread' : 'single',
-    rect: rect ? {
-      x: finiteNumber(rect.x ?? rect.left),
-      y: finiteNumber(rect.y ?? rect.top),
-      width: finiteNumber(rect.width),
-      height: finiteNumber(rect.height),
-    } : undefined,
-  };
-}
-
-function finiteNumber(value) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : undefined;
-}
-
-function safeText(value, maxLength) {
-  return String(value || '').trim().slice(0, maxLength);
-}
-
-function safeUrl(value) {
-  const text = safeText(value, 2048);
-  if (!text) return '';
-  try {
-    const url = new URL(text);
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') return '';
-    return url.toString();
-  } catch {
-    return '';
-  }
-}
-
-function formatBytes(bytes) {
-  if (!Number.isFinite(bytes)) return 'unknown size';
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KiB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-}
-
 async function openDb() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -688,10 +606,10 @@ async function evictCacheIfNeeded() {
     const store = transaction.objectStore(IMAGE_STORE);
     const entries = await idbRequest(store.getAll());
     let totalBytes = entries.reduce((sum, entry) => sum + Number(entry.bytes || entry.dataUrl?.length || 0), 0);
-    if (entries.length <= MAX_CACHE_ENTRIES && totalBytes <= MAX_CACHE_BYTES) return;
+    if (entries.length <= SIZE_LIMITS.maxCacheEntries && totalBytes <= SIZE_LIMITS.maxCacheBytes) return;
     entries.sort((a, b) => (a.lastAccessed || 0) - (b.lastAccessed || 0));
     const toDelete = [];
-    while ((entries.length - toDelete.length > MAX_CACHE_ENTRIES || totalBytes > MAX_CACHE_BYTES) && entries.length > toDelete.length) {
+    while ((entries.length - toDelete.length > SIZE_LIMITS.maxCacheEntries || totalBytes > SIZE_LIMITS.maxCacheBytes) && entries.length > toDelete.length) {
       const entry = entries[toDelete.length];
       toDelete.push(entry);
       totalBytes -= Number(entry.bytes || entry.dataUrl?.length || 0);
