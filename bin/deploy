@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+SERVER="${SERVER:-192.168.0.90}"
+SSH_USER="${SSH_USER:-akitaonrails}"
+REMOTE_DIR="${REMOTE_DIR:-/var/opt/docker/frank/yomik}"
+REGISTRY="${REGISTRY:-192.168.0.90:3007/akitaonrails}"
+TAG="${1:-latest}"
+VARIANT="${2:-rocm}"
+
+if [[ "${VARIANT}" != "rocm" ]]; then
+  echo "Remote compose currently deploys frank-yomik-worker-rocm:latest. Use variant: rocm."
+  exit 1
+fi
+
+SSH_OPTS=(-F /dev/null)
+
+if [[ -n "${SSH_KNOWN_HOSTS:-}" ]]; then
+  SSH_OPTS+=(-o "UserKnownHostsFile=${SSH_KNOWN_HOSTS}")
+fi
+
+if [[ "${SSH_STRICT_HOST_KEY_CHECKING:-yes}" == "no" ]]; then
+  SSH_OPTS+=(-o StrictHostKeyChecking=no)
+fi
+
+ssh_cmd() {
+  ssh "${SSH_OPTS[@]}" "${SSH_USER}@${SERVER}" "$@"
+}
+
+push_image() {
+  local dockerfile="$1"
+  local image_name="$2"
+  local image="${REGISTRY}/${image_name}"
+
+  if [[ "${TAG}" == "latest" ]]; then
+    docker build -f "${dockerfile}" -t "${image}:latest" .
+    docker push "${image}:latest"
+    return
+  fi
+
+  docker build -f "${dockerfile}" -t "${image}:${TAG}" -t "${image}:latest" .
+  docker push "${image}:${TAG}"
+  docker push "${image}:latest"
+}
+
+cd "${ROOT}"
+
+echo "==> Building and pushing api image"
+push_image "Dockerfile.api" "frank-yomik-api"
+
+echo "==> Building and pushing worker image"
+push_image "Dockerfile.worker-rocm" "frank-yomik-worker-rocm"
+
+echo "==> Pulling latest images on ${SERVER}"
+ssh_cmd "cd ${REMOTE_DIR} && docker compose pull api worker"
+
+echo "==> Restarting docker compose in ${REMOTE_DIR}"
+ssh_cmd "cd ${REMOTE_DIR} && docker compose down && docker compose up -d"
+
+echo "==> Current status"
+ssh_cmd "cd ${REMOTE_DIR} && docker compose ps"
