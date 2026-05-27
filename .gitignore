@@ -22,6 +22,8 @@ server/models/
 
 # Compiled binaries
 server/server
+server/frank_manga
+server/frank_yomik
 
 # Font archives and embedded repos
 server/fonts/*.zip
@@ -36,6 +38,8 @@ client/.packages
 client/pubspec.lock
 
 # Android signing
+*.jks
+*.keystore
 client/android/key.properties
 client/android/app/*.jks
 client/android/app/*.keystore
@@ -52,3 +56,6 @@ server/tests/ab_*_results.json
 
 # Claude Code
 .claude/
+
+# Local tool artifacts
+.ai-jail
