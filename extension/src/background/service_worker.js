@@ -9,7 +9,8 @@ import {
   normalizeSettings,
 } from '../shared/config.js';
 
-const POLL_ALARM_NAME = 'frankPollJobs';
+const POLL_ALARM_NAME = 'frankPollJobsSoon';
+const POLL_FALLBACK_ALARM_NAME = 'frankPollJobsFallback';
 const POLL_DELAY_MS = 3_000;
 const JOB_TIMEOUT_MS = 5 * 60_000;
 const MAX_CACHE_ENTRIES = 200;
@@ -36,7 +37,7 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === POLL_ALARM_NAME) {
+  if (alarm.name === POLL_ALARM_NAME || alarm.name === POLL_FALLBACK_ALARM_NAME) {
     pollActiveJobs().catch((error) => console.warn('[Frank] poll alarm failed:', error));
   }
 });
@@ -44,7 +45,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleMessage(message, sender)
     .then(sendResponse)
-    .catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+    .catch((error) => {
+      recordMessageError(message, sender, error).finally(() => {
+        sendResponse({ ok: false, error: error.message || String(error) });
+      });
+    });
   return true;
 });
 
@@ -137,6 +142,7 @@ async function submitCapture(message, sender) {
     throw new Error('capture must be a PNG or JPEG data URL');
   }
   if (dataUrl.length > MAX_CAPTURE_DATA_URL_BYTES) throw new Error('capture is too large');
+  await recordEvent({ site, level: 'info', message: `Received ${site} capture ${pageId} (${formatBytes(dataUrl.length)})` });
 
   const image = await dataUrlToBlobAndBytes(dataUrl);
   const sourceHash = await sha256Hex(image.bytes);
@@ -272,6 +278,17 @@ function validateAllowedWebtoonImageUrl(value) {
   return url;
 }
 
+async function recordMessageError(message, sender, error) {
+  if (!sender?.tab) return;
+  try {
+    const site = validateSender(sender);
+    const type = safeText(message?.type, 80) || 'message';
+    await recordEvent({ site, level: 'error', message: `${type} failed: ${error.message || error}` });
+  } catch {
+    // Ignore diagnostics failures.
+  }
+}
+
 async function queueJobRecord({ response, sender, pageId, site, sourceHash, pipeline, cachePipeline, cacheKey, capture }) {
   const jobId = String(response.job_id || '');
   if (!jobId) throw new Error('server response did not include job_id');
@@ -397,6 +414,7 @@ async function pollActiveJobs() {
   if (!entries.length) return;
 
   let changed = false;
+  await recordEvent({ site: 'extension', level: 'info', message: `Polling ${entries.length} active job(s)` });
   for (const job of entries) {
     const recordId = job.recordId || job.jobId;
     if (Date.now() - job.submittedAt > JOB_TIMEOUT_MS) {
@@ -409,6 +427,9 @@ async function pollActiveJobs() {
     try {
       job.lastPollAt = Date.now();
       const status = await getJobStatus(settings, job.jobId);
+      job.status = status.status || job.status;
+      changed = true;
+      await recordEvent({ site: job.site, level: 'info', message: `Job ${job.jobId} status: ${status.status || 'unknown'}` });
       if (status.status === 'completed') {
         const imageUrl = status.image_url || `/api/v1/jobs/${encodeURIComponent(job.jobId)}/image`;
         const imageDataUrl = await downloadImageDataUrl(settings, imageUrl);
@@ -444,6 +465,7 @@ async function pollActiveJobs() {
       }
     } catch (error) {
       console.warn(`[Frank] poll failed for ${job.jobId}:`, error);
+      await recordEvent({ site: job.site, level: 'error', message: `Poll failed for ${job.jobId}: ${error.message || error}` });
     }
   }
 
@@ -462,11 +484,12 @@ async function notifyTab(job, message) {
 }
 
 function ensurePollingAlarm() {
-  chrome.alarms.create(POLL_ALARM_NAME, { periodInMinutes: 0.5 });
+  chrome.alarms.create(POLL_FALLBACK_ALARM_NAME, { periodInMinutes: 0.5 });
 }
 
 function schedulePollSoon() {
   if (pollTimer) clearTimeout(pollTimer);
+  chrome.alarms.create(POLL_ALARM_NAME, { when: Date.now() + POLL_DELAY_MS });
   pollTimer = setTimeout(() => {
     pollTimer = null;
     pollActiveJobs().catch((error) => console.warn('[Frank] scheduled poll failed:', error));
@@ -610,6 +633,12 @@ function safeUrl(value) {
   } catch {
     return '';
   }
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return 'unknown size';
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KiB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
 }
 
 async function openDb() {

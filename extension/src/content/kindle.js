@@ -141,6 +141,7 @@
       } else {
         const imageDataUrl = captureImage(target, 'full');
         if (!imageDataUrl) throw new Error('Kindle capture failed');
+        report('info', `Captured Kindle page ${detection.index} (${formatBytes(imageDataUrl.length)})`);
         const response = await submitCapture({ ...detection, pageMode: 'single' }, imageDataUrl, detection.pageId);
         if (response.status === 'completed') await applyKindle(response);
       }
@@ -156,6 +157,7 @@
     const left = captureImage(target, 'left');
     const right = captureImage(target, 'right');
     if (!left || !right) throw new Error('Kindle spread capture failed');
+    report('info', `Captured Kindle spread halves (${formatBytes(left.length)} + ${formatBytes(right.length)})`);
 
     const group = {
       pageId: detection.pageId,
@@ -238,6 +240,7 @@
         window.setTimeout(() => window.FrankOverlay?.applyKindleResult(message), delay);
       }
     }
+    if (!ok) report('error', `Kindle translated image was ready but could not be applied: ${message.pageId || 'unknown page'}`);
     return ok;
   }
 
@@ -403,5 +406,11 @@
 
   function report(level, message) {
     chrome.runtime.sendMessage({ type: 'REPORT_EVENT', site: 'kindle', level, message }).catch(() => {});
+  }
+
+  function formatBytes(bytes) {
+    if (!Number.isFinite(bytes)) return 'unknown size';
+    if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KiB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
   }
 })();

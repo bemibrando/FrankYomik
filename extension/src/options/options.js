@@ -17,6 +17,7 @@ const diagnosticsListEl = document.querySelector('#diagnostics-list');
 
 loadSettings();
 refreshDiagnostics();
+window.setInterval(refreshDiagnostics, 2000);
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -111,7 +112,9 @@ async function refreshDiagnostics() {
   }
 
   const jobs = Object.values(response.jobs || {});
-  activeJobsEl.textContent = `Active jobs: ${jobs.length}`;
+  activeJobsEl.textContent = jobs.length
+    ? `Active jobs: ${jobs.length} (${jobs.map((job) => `${job.site || 'job'}:${job.status || 'queued'}`).join(', ')})`
+    : 'Active jobs: 0';
   const events = Array.isArray(response.diagnostics) ? response.diagnostics.slice(0, 12) : [];
   if (!events.length) {
     const item = document.createElement('li');
