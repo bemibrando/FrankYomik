@@ -558,7 +558,7 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
         return
 
     font_size = _fit_vertical_font_size(chars, bw, bh)
-    furi_size = max(MIN_FONT_SIZE, int(font_size * FURIGANA_SIZE_RATIO))
+    furi_size = _furigana_font_size(font_size)
 
     font = _load_font(FONT_JP, font_size)
     furi_font = _load_font(FONT_JP, furi_size)
@@ -701,12 +701,12 @@ def _fit_vertical_font_size(chars: list[dict], bw: int, bh: int) -> int:
 
     for _ in range(15):
         mid = (lo + hi) // 2
-        furi_extra = int(mid * FURIGANA_SIZE_RATIO) + 2 if has_furigana else 0
+        furi_extra = _furigana_font_size(mid) + 2 if has_furigana else 0
         col_width = mid + furi_extra
         char_height = int(mid * 1.05)
 
         # Reserve space for the first column's furigana extending past the rightmost kanji
-        furi_offset = (int(mid * FURIGANA_SIZE_RATIO) + 2) if has_furigana else 0
+        furi_offset = (_furigana_font_size(mid) + 2) if has_furigana else 0
         available_width = bw - furi_offset
 
         chars_per_col = max(1, bh // char_height)
@@ -720,6 +720,11 @@ def _fit_vertical_font_size(chars: list[dict], bw: int, bh: int) -> int:
             hi = mid - 1
 
     return best
+
+
+def _furigana_font_size(font_size: int) -> int:
+    """Return furigana font size for a fitted main Japanese font size."""
+    return max(MIN_FONT_SIZE, int(font_size * FURIGANA_SIZE_RATIO))
 
 
 # --- Artwork text rendering ---

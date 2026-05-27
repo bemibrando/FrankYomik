@@ -6,6 +6,7 @@ from kindle.text_renderer import (
     _word_wrap,
     _break_word_to_fit,
     _choose_layout,
+    _furigana_font_size,
 )
 from kindle.config import FONT_EN
 
@@ -58,6 +59,17 @@ class TestSFXDetection:
         assert _choose_layout("!!") == "vertical_sfx"
         assert _choose_layout("Why?") == "horizontal"
         assert _choose_layout("Hello world") == "horizontal"
+
+
+class TestFuriganaSizing:
+    """Furigana should stay readable while layout reserves matching space."""
+
+    def test_furigana_size_is_half_of_main_text(self):
+        assert _furigana_font_size(24) == 12
+        assert _furigana_font_size(30) == 15
+
+    def test_furigana_size_keeps_minimum(self):
+        assert _furigana_font_size(12) == 10
 
 
 class TestWordWrap:
