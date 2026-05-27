@@ -349,6 +349,6 @@ jobs:
         with:
           name: "Frank Yomik ${{ github.ref_name }}"
           body: ${{ steps.release-notes.outputs.body }}
-          draft: true
+          draft: false
           prerelease: false
           files: artifacts/*
