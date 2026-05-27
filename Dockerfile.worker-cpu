@@ -1,0 +1,46 @@
+# CPU-only worker — no CUDA, smaller image
+FROM python:3.12-bookworm AS builder
+
+WORKDIR /build
+COPY server/requirements.txt .
+# Install CPU-only PyTorch first, then the rest
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/cpu && \
+    grep -v simple-lama requirements.txt | pip install --no-cache-dir -r /dev/stdin && \
+    pip install --no-cache-dir --no-deps simple-lama-inpainting
+
+# Runtime
+FROM python:3.12-slim-bookworm
+
+ARG APP_UID=1026
+ARG APP_GID=1026
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libgl1 libglib2.0-0 gosu \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app/server
+COPY server/ .
+
+RUN echo "worker:x:${APP_UID}:${APP_GID}:worker:/home/worker:/usr/sbin/nologin" >> /etc/passwd \
+    && echo "worker:x:${APP_GID}:" >> /etc/group \
+    && mkdir -p /home/worker/.cache/huggingface \
+                /home/worker/.cache/manga_ocr \
+                /home/worker/.EasyOCR/model \
+                /app/server/cache \
+    && chown -R ${APP_UID}:${APP_GID} /home/worker /app
+
+COPY docker/worker-entrypoint.sh /usr/local/bin/worker-entrypoint.sh
+RUN chmod +x /usr/local/bin/worker-entrypoint.sh
+
+ENV HOME=/home/worker
+ENV HF_HOME=/home/worker/.cache/huggingface
+ENV EASYOCR_MODULE_PATH=/home/worker/.EasyOCR
+
+ENTRYPOINT ["/usr/local/bin/worker-entrypoint.sh"]
+CMD ["--pipeline", "both"]
