@@ -476,6 +476,8 @@ function sanitizeCapture(capture = {}) {
   return {
     imgSrc: safeText(capture.imgSrc, 2048),
     originalSrc: safeText(capture.originalSrc, 2048),
+    groupId: safeText(capture.groupId, 160),
+    side: capture.side === 'left' || capture.side === 'right' ? capture.side : undefined,
     index: Number.isFinite(Number(capture.index)) ? Number(capture.index) : undefined,
     pageMode: capture.pageMode === 'spread' ? 'spread' : 'single',
     rect: rect ? {

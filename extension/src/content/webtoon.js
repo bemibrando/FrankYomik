@@ -1,0 +1,258 @@
+(function frankWebtoonModule() {
+  'use strict';
+
+  if (window.FrankWebtoon) return;
+
+  const ALLOWED_IMAGE_HOSTS = new Set([
+    'comic.naver.com',
+    'm.comic.naver.com',
+    'image-comic.pstatic.net',
+    'webtoon-phinf.pstatic.net',
+    'swebtoon-phinf.pstatic.net',
+  ]);
+  const MAX_CONCURRENT = 3;
+  const RESCAN_MS = 2000;
+
+  let started = false;
+  let settings = {};
+  let observer = null;
+  let mutationObserver = null;
+  let scanTimer = null;
+  let active = 0;
+  const queue = [];
+  const submitted = new Set();
+  const pageById = new Map();
+
+  window.FrankWebtoon = { start };
+
+  function start(nextSettings) {
+    if (started) return;
+    started = true;
+    settings = nextSettings || {};
+    installMessageListener();
+    installObservers();
+    scanAndQueue();
+    scanTimer = window.setInterval(scanAndQueue, RESCAN_MS);
+    window.addEventListener('pagehide', cleanup, { once: true });
+    console.info('[Frank] Naver Webtoon strategy started');
+  }
+
+  function cleanup() {
+    observer?.disconnect();
+    mutationObserver?.disconnect();
+    if (scanTimer) window.clearInterval(scanTimer);
+  }
+
+  function installMessageListener() {
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message?.type === 'FRANK_JOB_COMPLETE' && message.site === 'webtoon') handleJobComplete(message);
+      if (message?.type === 'FRANK_JOB_FAILED' && message.site === 'webtoon') handleJobFailed(message);
+    });
+  }
+
+  function installObservers() {
+    observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const img = entry.target;
+        const index = findPageImages().indexOf(img);
+        if (index >= 0) queueImage(img, index, 'visible');
+      }
+      pumpQueue();
+    }, {
+      rootMargin: rootMarginForPrefetch(),
+      threshold: 0.05,
+    });
+
+    mutationObserver = new MutationObserver(() => debounceScan());
+    if (document.body) mutationObserver.observe(document.body, { childList: true, subtree: true });
+  }
+
+  let scanDebounce = null;
+  function debounceScan() {
+    if (scanDebounce) window.clearTimeout(scanDebounce);
+    scanDebounce = window.setTimeout(scanAndQueue, 350);
+  }
+
+  function scanAndQueue() {
+    if (!settings.configured || settings.webtoonEnabled === false) return;
+    const imgs = findPageImages();
+    imgs.forEach((img, index) => {
+      img.dataset.frankIndex = String(index);
+      if (!img.dataset.frankOriginalSrc) {
+        const src = imageSrc(img);
+        if (src) img.dataset.frankOriginalSrc = src;
+      }
+      observer?.observe(img);
+
+      if (settings.webtoonPrefetch === 'episode') {
+        maybeForceLazyLoad(img);
+        queueImage(img, index, 'episode');
+      } else if (settings.webtoonPrefetch !== 'off' && isNearViewport(img, 1600)) {
+        queueImage(img, index, 'nearby');
+      } else if (isInViewport(img)) {
+        queueImage(img, index, 'visible');
+      }
+
+      if (!img.complete || img.naturalWidth <= 0) {
+        img.addEventListener('load', () => {
+          const currentIndex = findPageImages().indexOf(img);
+          if (currentIndex >= 0 && (isNearViewport(img, 1600) || settings.webtoonPrefetch === 'episode')) {
+            queueImage(img, currentIndex, 'loaded');
+            pumpQueue();
+          }
+        }, { once: true });
+      }
+    });
+    pumpQueue();
+  }
+
+  function findPageImages() {
+    let imgs = Array.from(document.querySelectorAll('img.toon_image'));
+    if (imgs.length) return imgs;
+
+    for (const selector of ['#comic_view_area img', '.wt_viewer img', '#sectionContWide img']) {
+      imgs = Array.from(document.querySelectorAll(selector));
+      if (imgs.length) return imgs;
+    }
+
+    return Array.from(document.querySelectorAll('img')).filter((img) => {
+      const w = img.naturalWidth || img.width || 0;
+      const h = img.naturalHeight || img.height || 0;
+      return w > 600 && h > 400;
+    });
+  }
+
+  function queueImage(img, index, reason) {
+    const src = imageSrc(img);
+    if (!src || !isAllowedImageUrl(src)) return;
+    if ((img.naturalWidth || img.width || 0) < 200 || (img.naturalHeight || img.height || 0) < 200) return;
+
+    const pageId = `wt-${index}`;
+    if (submitted.has(pageId) || queue.some((item) => item.pageId === pageId)) return;
+    submitted.add(pageId);
+    img.dataset.frankIndex = String(index);
+    img.dataset.frankOriginalSrc = src;
+    pageById.set(pageId, { img, src, index });
+    queue.push({ img, src, index, pageId, reason });
+  }
+
+  function pumpQueue() {
+    while (active < MAX_CONCURRENT && queue.length) {
+      const item = queue.shift();
+      active += 1;
+      submitImage(item).finally(() => {
+        active = Math.max(0, active - 1);
+        pumpQueue();
+      });
+    }
+  }
+
+  async function submitImage(item) {
+    try {
+      const imageDataUrl = await captureImage(item.src);
+      const response = await chrome.runtime.sendMessage({
+        type: 'SUBMIT_CAPTURE',
+        site: 'webtoon',
+        pageId: item.pageId,
+        priority: item.reason === 'visible' ? 'high' : 'low',
+        metadata: parseWebtoonMetadata(item.index),
+        capture: {
+          originalSrc: item.src,
+          index: item.index,
+          pageMode: 'single',
+        },
+        imageDataUrl,
+      });
+      if (!response?.ok) throw new Error(response?.error || 'submit failed');
+      if (response.status === 'completed') await applyWebtoon(response);
+    } catch (error) {
+      submitted.delete(item.pageId);
+      console.warn('[Frank] Webtoon submit failed:', error);
+    }
+  }
+
+  async function captureImage(src) {
+    const response = await fetch(src, {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'force-cache',
+    });
+    if (!response.ok) throw new Error(`image fetch failed: HTTP ${response.status}`);
+    const blob = await response.blob();
+    if (!blob.type.startsWith('image/')) throw new Error(`unexpected image type: ${blob.type || 'unknown'}`);
+    return blobToDataUrl(blob);
+  }
+
+  async function handleJobComplete(message) {
+    await applyWebtoon(message);
+  }
+
+  function handleJobFailed(message) {
+    submitted.delete(message.pageId);
+    console.warn('[Frank] Webtoon job failed:', message.error);
+  }
+
+  async function applyWebtoon(message) {
+    const known = pageById.get(message.pageId);
+    if (known?.img && known.src && !message.capture?.originalSrc) {
+      message.capture = { ...(message.capture || {}), originalSrc: known.src, index: known.index };
+    }
+    return window.FrankOverlay?.applyWebtoonResult(message);
+  }
+
+  function parseWebtoonMetadata(index) {
+    const url = new URL(location.href);
+    return {
+      title: url.searchParams.get('titleId') || 'webtoon',
+      chapter: url.searchParams.get('no') || '0',
+      pageNumber: String(index),
+      sourceUrl: location.href,
+    };
+  }
+
+  function imageSrc(img) {
+    return img.currentSrc || img.src || img.dataset.src || img.getAttribute('data-lazy-src') || '';
+  }
+
+  function maybeForceLazyLoad(img) {
+    const lazySrc = img.dataset.src || img.getAttribute('data-lazy-src');
+    if (lazySrc && !img.src && isAllowedImageUrl(lazySrc)) img.src = lazySrc;
+  }
+
+  function isAllowedImageUrl(value) {
+    try {
+      const url = new URL(value, location.href);
+      const host = url.hostname.toLowerCase();
+      if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
+      return ALLOWED_IMAGE_HOSTS.has(host) || host.endsWith('.pstatic.net');
+    } catch {
+      return false;
+    }
+  }
+
+  function isInViewport(img) {
+    const rect = img.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight && rect.right > 0 && rect.left < window.innerWidth;
+  }
+
+  function isNearViewport(img, margin) {
+    const rect = img.getBoundingClientRect();
+    return rect.bottom > -margin && rect.top < window.innerHeight + margin && rect.right > -200 && rect.left < window.innerWidth + 200;
+  }
+
+  function rootMarginForPrefetch() {
+    if (settings.webtoonPrefetch === 'off') return '0px';
+    if (settings.webtoonPrefetch === 'episode') return '4000px 0px';
+    return '1600px 0px';
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error || new Error('failed to read webtoon image'));
+      reader.onload = () => resolve(String(reader.result));
+      reader.readAsDataURL(blob);
+    });
+  }
+})();
