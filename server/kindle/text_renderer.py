@@ -2,6 +2,7 @@
 
 import logging
 import re
+from functools import lru_cache
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
@@ -22,6 +23,8 @@ _HORIZONTAL_MASK_VERTICAL_INSET_PCT = 15
 _HORIZONTAL_MASK_WIDTH_PCT = 30
 _VERTICAL_MASK_VERTICAL_INSET_PCT = 5
 _VERTICAL_MASK_WIDTH_PCT = 70
+_MAIN_VERTICAL_METRIC_CHARS = "漢今藤原拓海接触鬼神全力"
+_FURIGANA_METRIC_CHARS = "きょうせつふじわらたくみ"
 
 log = logging.getLogger(__name__)
 
@@ -581,7 +584,7 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
         furi_bg_fill = "white"
 
     col_width = font_size + furi_size + 2
-    char_height = int(font_size * 1.05)
+    char_height = _vertical_main_char_height(font_size)
 
     furi_space = furi_size + 2 if any(c["furigana"] for c in chars) else 0
 
@@ -658,18 +661,17 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
 
         if ch_info["furigana"]:
             furi_x = col_x + font_size + 1
-            furi_char_h = furi_size + 1
+            furi_char_h = _vertical_furigana_char_height(furi_size)
             furi_total_h = len(ch_info["furigana"]) * furi_char_h
             local_furi_font = furi_font
             local_furi_size = furi_size
             # Compress furigana spacing and font when stack overflows char_height
             if furi_total_h > char_height and len(ch_info["furigana"]) > 1:
-                furi_char_h = char_height // len(ch_info["furigana"])
+                local_furi_size, furi_char_h = _fit_furigana_stack(
+                    furi_size, char_height, len(ch_info["furigana"])
+                )
                 furi_total_h = len(ch_info["furigana"]) * furi_char_h
-                # Shrink font to match reduced spacing so characters don't overlap
-                if furi_char_h < furi_size:
-                    local_furi_size = max(MIN_FONT_SIZE // 2, furi_char_h - 1)
-                    local_furi_font = _load_font(FONT_JP, local_furi_size)
+                local_furi_font = _load_font(FONT_JP, local_furi_size)
             furi_y = char_y + (char_height - furi_total_h) // 2
             for fc in ch_info["furigana"]:
                 if furi_x + local_furi_size <= x2 - BUBBLE_PADDING:
@@ -708,7 +710,7 @@ def _fit_vertical_font_size(chars: list[dict], bw: int, bh: int) -> int:
         mid = (lo + hi) // 2
         furi_extra = _furigana_font_size(mid) + 2 if has_furigana else 0
         col_width = mid + furi_extra
-        char_height = int(mid * 1.05)
+        char_height = _vertical_main_char_height(mid)
 
         chars_per_col = max(1, bh // char_height)
         cols_needed = (n + chars_per_col - 1) // chars_per_col
@@ -726,6 +728,49 @@ def _fit_vertical_font_size(chars: list[dict], bw: int, bh: int) -> int:
 def _furigana_font_size(font_size: int) -> int:
     """Return furigana font size for a fitted main Japanese font size."""
     return max(MIN_FONT_SIZE, int(font_size * FURIGANA_SIZE_RATIO))
+
+
+@lru_cache(maxsize=128)
+def _vertical_main_char_height(font_size: int) -> int:
+    """Cell height for vertical Japanese glyphs, including background padding."""
+    measured = _font_background_cell_height(
+        font_size, _MAIN_VERTICAL_METRIC_CHARS, _TEXT_BG_PAD, gap_rows=1,
+    )
+    return max(int(font_size * 1.05), measured)
+
+
+@lru_cache(maxsize=128)
+def _vertical_furigana_char_height(font_size: int) -> int:
+    """Cell height for stacked furigana glyphs, including background padding."""
+    measured = _font_background_cell_height(
+        font_size, _FURIGANA_METRIC_CHARS, 1, gap_rows=0,
+    )
+    return max(font_size + 1, measured)
+
+
+def _fit_furigana_stack(target_size: int, total_height: int,
+                        count: int) -> tuple[int, int]:
+    """Fit stacked furigana inside one main character cell without overlap."""
+    min_size = max(1, MIN_FONT_SIZE // 2)
+    for size in range(target_size, min_size - 1, -1):
+        char_height = _vertical_furigana_char_height(size)
+        if char_height * count <= total_height:
+            return size, char_height
+    return min_size, max(1, total_height // count)
+
+
+def _font_background_cell_height(font_size: int, chars: str, bg_pad: int,
+                                 gap_rows: int) -> int:
+    """Measure cell height needed so adjacent background rects do not touch."""
+    font = _load_font(FONT_JP, font_size)
+    probe = Image.new("RGB", (1, 1))
+    draw = ImageDraw.Draw(probe)
+    bboxes = [draw.textbbox((0, 0), ch, font=font) for ch in chars]
+    top = min(b[1] for b in bboxes)
+    bottom = max(b[3] for b in bboxes)
+    # PIL rectangle endpoints are inclusive, so +1 prevents overlap. Main text
+    # asks for one extra blank row; compact furigana only needs no-overlap.
+    return int(bottom - top + 2 * bg_pad + 1 + gap_rows)
 
 
 # --- Artwork text rendering ---

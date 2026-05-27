@@ -9,7 +9,10 @@ from kindle.text_renderer import (
     _choose_layout,
     _furigana_font_size,
     _fit_vertical_font_size,
+    _fit_furigana_stack,
     _mask_safe_bbox,
+    _vertical_furigana_char_height,
+    _vertical_main_char_height,
 )
 from kindle.config import FONT_EN
 
@@ -82,6 +85,21 @@ class TestFuriganaSizing:
         # The fitter should allow that exact rendered width instead of
         # subtracting another furigana column from the available width.
         assert _fit_vertical_font_size(chars, bw=90, bh=200) == 29
+
+    def test_vertical_cells_include_background_padding(self):
+        # The old 1.05x cell was sometimes a pixel shorter than the actual
+        # white background around CJK glyphs, so the next character could erase
+        # the bottom of the previous one in tight stylized bubbles.
+        assert _vertical_main_char_height(29) > int(29 * 1.05)
+        assert _vertical_furigana_char_height(14) > 14 + 1
+
+    def test_compressed_furigana_stack_uses_measured_spacing(self):
+        main_cell = _vertical_main_char_height(29)
+        size, cell = _fit_furigana_stack(target_size=14,
+                                         total_height=main_cell,
+                                         count=2)
+        assert size <= 14
+        assert cell * 2 <= main_cell
 
 
 class TestMaskSafeBBox:
