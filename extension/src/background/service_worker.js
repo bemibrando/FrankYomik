@@ -16,6 +16,7 @@ const MAX_CACHE_ENTRIES = 200;
 const MAX_CAPTURE_DATA_URL_BYTES = 28 * 1024 * 1024;
 const MAX_RESULT_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_CACHE_BYTES = 200 * 1024 * 1024;
+const MAX_DIAGNOSTICS = 80;
 const DB_NAME = 'frank-yomik-extension';
 const DB_VERSION = 1;
 const IMAGE_STORE = 'images';
@@ -65,9 +66,14 @@ async function handleMessage(message, sender) {
       return submitCapture(message, sender);
     case 'FETCH_WEBTOON_IMAGE':
       return fetchWebtoonImage(message, sender);
+    case 'REPORT_EVENT':
+      return reportEvent(message, sender);
     case 'GET_ACTIVE_JOBS':
       assertExtensionPage(sender, 'GET_ACTIVE_JOBS');
       return { ok: true, jobs: await loadActiveJobs() };
+    case 'GET_DIAGNOSTICS':
+      assertExtensionPage(sender, 'GET_DIAGNOSTICS');
+      return { ok: true, diagnostics: await loadDiagnostics(), jobs: await loadActiveJobs() };
     default:
       throw new Error(`unknown message type: ${message.type}`);
   }
@@ -155,6 +161,7 @@ async function submitCapture(message, sender) {
 
   const metadata = sanitizeMetadata(message.metadata || {}, sender.url || sender.tab?.url || '');
   const priority = message.priority === 'low' ? 'low' : 'high';
+  await recordEvent({ site, level: 'info', message: `Submitting ${site} capture ${pageId}` });
   const response = await submitJob(settings, image.blob, {
     pipeline,
     priority,
@@ -171,6 +178,7 @@ async function submitCapture(message, sender) {
     try {
       const translated = await downloadImageDataUrl(settings, imageUrl);
       await cachePut(cacheKey, translated, { sourceHash, pipeline: cachePipeline, targetLanguage });
+      await recordEvent({ site, level: 'info', message: `Cache hit applied for ${pageId}` });
       return {
         ok: true,
         status: 'completed',
@@ -237,6 +245,16 @@ async function fetchWebtoonImage(message, sender) {
   return { ok: true, imageDataUrl: await blobToDataUrl(blob) };
 }
 
+async function reportEvent(message, sender) {
+  const site = validateSender(sender);
+  await recordEvent({
+    site,
+    level: safeText(message.level, 20) || 'info',
+    message: safeText(message.message, 300),
+  });
+  return { ok: true };
+}
+
 function validateAllowedWebtoonImageUrl(value) {
   let url;
   try {
@@ -264,6 +282,7 @@ async function queueJobRecord({ response, sender, pageId, site, sourceHash, pipe
     pageId,
     site,
     tabId: sender.tab?.id,
+    frameId: sender.frameId,
     sourceHash,
     pipeline,
     cachePipeline,
@@ -277,6 +296,7 @@ async function queueJobRecord({ response, sender, pageId, site, sourceHash, pipe
   const jobs = await loadActiveJobs();
   jobs[job.recordId] = job;
   await saveActiveJobs(jobs);
+  await recordEvent({ site, level: 'info', message: `Queued ${site} job ${jobId} for ${pageId}` });
   schedulePollSoon();
   return { ok: true, status: 'queued', pageId, site, jobId, sourceHash, pipeline, capture };
 }
@@ -399,6 +419,7 @@ async function pollActiveJobs() {
         });
         delete jobs[recordId];
         changed = true;
+        await recordEvent({ site: job.site, level: 'info', message: `Completed ${job.site} job ${job.jobId}` });
         await notifyTab(job, {
           type: 'FRANK_JOB_COMPLETE',
           pageId: job.pageId,
@@ -412,6 +433,7 @@ async function pollActiveJobs() {
       } else if (status.status === 'failed') {
         delete jobs[recordId];
         changed = true;
+        await recordEvent({ site: job.site, level: 'error', message: `Failed ${job.site} job ${job.jobId}: ${status.error || 'Job failed'}` });
         await notifyTab(job, {
           type: 'FRANK_JOB_FAILED',
           pageId: job.pageId,
@@ -432,7 +454,8 @@ async function pollActiveJobs() {
 async function notifyTab(job, message) {
   if (typeof job.tabId !== 'number') return;
   try {
-    await chrome.tabs.sendMessage(job.tabId, message);
+    const options = typeof job.frameId === 'number' ? { frameId: job.frameId } : undefined;
+    await chrome.tabs.sendMessage(job.tabId, message, options);
   } catch (error) {
     console.warn('[Frank] could not notify tab:', error);
   }
@@ -459,6 +482,23 @@ async function loadActiveJobs() {
 
 async function saveActiveJobs(jobs) {
   await chrome.storage.local.set({ [STORAGE_KEYS.activeJobs]: jobs });
+}
+
+async function loadDiagnostics() {
+  const stored = await chrome.storage.local.get(STORAGE_KEYS.diagnostics);
+  const diagnostics = stored[STORAGE_KEYS.diagnostics];
+  return Array.isArray(diagnostics) ? diagnostics : [];
+}
+
+async function recordEvent(event) {
+  const diagnostics = await loadDiagnostics();
+  diagnostics.unshift({
+    ts: Date.now(),
+    site: safeText(event.site, 40),
+    level: event.level === 'error' ? 'error' : 'info',
+    message: safeText(event.message, 300),
+  });
+  await chrome.storage.local.set({ [STORAGE_KEYS.diagnostics]: diagnostics.slice(0, MAX_DIAGNOSTICS) });
 }
 
 function authHeaders(settings) {

@@ -12,8 +12,11 @@ const fields = {
   targetLanguage: document.querySelector('#target-language'),
   webtoonPrefetch: document.querySelector('#webtoon-prefetch'),
 };
+const activeJobsEl = document.querySelector('#active-jobs');
+const diagnosticsListEl = document.querySelector('#diagnostics-list');
 
 loadSettings();
+refreshDiagnostics();
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -30,6 +33,8 @@ document.querySelector('#health-check').addEventListener('click', async () => {
   const health = response.health || {};
   setStatus(`Server OK. Redis: ${health.redis || 'unknown'}, workers: ${health.active_workers ?? 0}.`, 'ok');
 });
+
+document.querySelector('#refresh-diagnostics').addEventListener('click', refreshDiagnostics);
 
 async function loadSettings() {
   const response = await sendMessage({ type: 'GET_SETTINGS' });
@@ -52,6 +57,7 @@ async function saveSettings() {
   }
   applySettings(response.settings || {});
   setStatus('Saved.', 'ok');
+  await refreshDiagnostics();
 }
 
 function applySettings(settings) {
@@ -94,6 +100,33 @@ function setStatus(message, kind = '') {
   statusEl.textContent = message;
   if (kind) statusEl.dataset.kind = kind;
   else delete statusEl.dataset.kind;
+}
+
+async function refreshDiagnostics() {
+  const response = await sendMessage({ type: 'GET_DIAGNOSTICS' });
+  if (!response.ok) {
+    activeJobsEl.textContent = 'Active jobs: unavailable';
+    diagnosticsListEl.replaceChildren();
+    return;
+  }
+
+  const jobs = Object.values(response.jobs || {});
+  activeJobsEl.textContent = `Active jobs: ${jobs.length}`;
+  const events = Array.isArray(response.diagnostics) ? response.diagnostics.slice(0, 12) : [];
+  if (!events.length) {
+    const item = document.createElement('li');
+    item.textContent = 'No extension activity recorded yet. Reload Kindle/Naver after saving settings.';
+    diagnosticsListEl.replaceChildren(item);
+    return;
+  }
+
+  diagnosticsListEl.replaceChildren(...events.map((event) => {
+    const item = document.createElement('li');
+    item.dataset.level = event.level || 'info';
+    const time = event.ts ? new Date(event.ts).toLocaleTimeString() : '';
+    item.textContent = `${time} ${event.site || 'extension'}: ${event.message || ''}`.trim();
+    return item;
+  }));
 }
 
 function sendMessage(message) {

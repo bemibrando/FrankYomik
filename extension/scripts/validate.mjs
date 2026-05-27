@@ -33,6 +33,7 @@ if (contentScript) {
   for (const match of contentScript.matches ?? []) {
     if (!expectedMatches.has(match)) fail(`unexpected content script match: ${match}`);
   }
+  if (contentScript.all_frames !== true) fail('content script must run in all frames for Kindle reader iframes');
 }
 
 const forbiddenPermissions = new Set(['tabs', 'webRequest', 'webRequestBlocking', '<all_urls>']);

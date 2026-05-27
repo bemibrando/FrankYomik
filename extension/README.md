@@ -26,6 +26,7 @@ The extension intentionally keeps Kindle and Naver pages close to vanilla: it do
    - manga pipeline and target language.
 7. Click **Save** and allow the exact API-origin permission when Chromium asks.
 8. Click **Check server**.
+9. Reload any Kindle/Naver tabs that were already open before installing or updating the extension.
 
 ## Development checks
 
@@ -55,6 +56,8 @@ This validates the manifest, security guardrails, and JavaScript syntax. There i
 - `src/content/overlay.js`
   - only replaces image `src` after a completed translation is available
 
+The popup contains a small diagnostics section. If a page is not translating, open the extension popup on that tab and check whether it reports strategy startup, page detection, queued jobs, or errors.
+
 ## Security notes
 
 - The bearer token is never sent to content scripts.
@@ -70,3 +73,4 @@ This validates the manifest, security guardrails, and JavaScript syntax. There i
 - The extension uses polling, not WebSocket, for job completion. This avoids long-lived MV3 service-worker assumptions.
 - Chrome for Android is not a target; use the existing Android app there.
 - If Kindle or Naver changes their DOM/image loading behavior, the content strategies may need updates.
+- Existing reader tabs may need a reload after extension install/update because static content scripts only inject on page load.

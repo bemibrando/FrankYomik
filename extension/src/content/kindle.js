@@ -18,6 +18,7 @@
   let navIntent = 'forward';
   let activeGroups = 0;
   let queuedDetection = null;
+  let lastNoTargetReportAt = 0;
   const processedBlobs = new Set();
   const spreadGroups = new Map();
 
@@ -31,6 +32,7 @@
     window.setInterval(detectPageChange, DETECT_INTERVAL_MS);
     window.setTimeout(detectPageChange, 400);
     console.info('[Frank] Kindle strategy started');
+    report('info', 'Kindle strategy started');
   }
 
   function installListeners() {
@@ -72,7 +74,10 @@
     if (!settings.configured || settings.kindleEnabled === false) return;
     if (loaderVisible()) return;
     const target = findVisibleBlob();
-    if (!target) return;
+    if (!target) {
+      reportNoTarget();
+      return;
+    }
     const blobSrc = target.src;
     if (!blobSrc || blobSrc === lastBlob || processedBlobs.has(blobSrc)) return;
 
@@ -104,6 +109,7 @@
       devicePixelRatio: window.devicePixelRatio || 1,
       kindlePage: findKindlePage(),
     };
+    report('info', `Detected Kindle ${pageMode} page ${pageCounter}`);
     scheduleSubmit(detection);
   }
 
@@ -140,7 +146,9 @@
       }
     } catch (error) {
       if (spreadGroups.has(detection.pageId)) spreadGroups.delete(detection.pageId);
+      processedBlobs.delete(detection.imgSrc);
       console.warn('[Frank] Kindle submit failed:', error);
+      report('error', `Kindle submit failed: ${error.message || error}`);
     }
   }
 
@@ -178,6 +186,7 @@
       imageDataUrl,
     });
     if (!response?.ok) throw new Error(response?.error || 'submit failed');
+    report('info', `Kindle capture submitted: ${pageId} (${response.status || 'unknown'})`);
     return response;
   }
 
@@ -192,6 +201,7 @@
 
   function handleJobFailed(message) {
     console.warn('[Frank] Kindle job failed:', message.error);
+    report('error', `Kindle job failed: ${message.error || 'unknown error'}`);
     if (message.capture?.groupId) spreadGroups.delete(message.capture.groupId);
     finishGroup();
   }
@@ -223,6 +233,7 @@
   async function applyKindle(message) {
     const ok = await window.FrankOverlay?.applyKindleResult(message);
     if (ok) {
+      report('info', `Kindle translated image applied: ${message.pageId || 'unknown page'}`);
       for (const delay of [800, 1800, 3500]) {
         window.setTimeout(() => window.FrankOverlay?.applyKindleResult(message), delay);
       }
@@ -305,6 +316,7 @@
     let best = null;
     let bestArea = 0;
     for (const img of imgs) {
+      if (img.dataset.frankTranslated === 'true') continue;
       if (!img.src?.startsWith('blob:')) continue;
       const rect = img.getBoundingClientRect();
       if (rect.width < 100 || rect.height < 100) continue;
@@ -380,5 +392,16 @@
     const ox = Math.min(a.right, b.right) - Math.max(a.left, b.left);
     const oy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
     return ox <= 0 || oy <= 0 ? 0 : ox * oy;
+  }
+
+  function reportNoTarget() {
+    const now = Date.now();
+    if (now - lastNoTargetReportAt < 15000) return;
+    lastNoTargetReportAt = now;
+    report('info', 'Kindle detector is running, but no visible blob page image was found yet');
+  }
+
+  function report(level, message) {
+    chrome.runtime.sendMessage({ type: 'REPORT_EVENT', site: 'kindle', level, message }).catch(() => {});
   }
 })();

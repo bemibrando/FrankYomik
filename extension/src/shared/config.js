@@ -11,6 +11,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
 export const STORAGE_KEYS = Object.freeze({
   settings: 'frankSettings',
   activeJobs: 'frankActiveJobs',
+  diagnostics: 'frankDiagnostics',
 });
 
 export const KINDLE_HOSTS = new Set(['read.amazon.co.jp', 'read.kindle.co.jp']);
