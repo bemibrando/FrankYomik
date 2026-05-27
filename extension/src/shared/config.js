@@ -10,10 +10,13 @@ export const DEFAULT_SETTINGS = Object.freeze({
 
 export const STORAGE_KEYS = Object.freeze({
   settings: 'frankSettings',
+  activeJobs: 'frankActiveJobs',
 });
 
 export const KINDLE_HOSTS = new Set(['read.amazon.co.jp', 'read.kindle.co.jp']);
 export const NAVER_WEBTOON_HOSTS = new Set(['comic.naver.com', 'm.comic.naver.com']);
+export const VALID_TARGET_LANGUAGES = new Set(['en', 'pt-br']);
+export const VALID_MANGA_PIPELINES = new Set(['manga_translate', 'manga_furigana']);
 
 export function normalizeSettings(raw = {}) {
   return {
