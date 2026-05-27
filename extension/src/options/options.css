@@ -1,0 +1,92 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  margin: 0;
+  min-width: 340px;
+  background: Canvas;
+  color: CanvasText;
+}
+
+main {
+  box-sizing: border-box;
+  max-width: 520px;
+  padding: 18px;
+}
+
+h1 {
+  font-size: 1.25rem;
+  margin: 0 0 8px;
+}
+
+.lede,
+.warning,
+#status {
+  color: color-mix(in srgb, CanvasText 72%, transparent);
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+form {
+  display: grid;
+  gap: 12px;
+}
+
+label,
+fieldset {
+  display: grid;
+  gap: 6px;
+}
+
+fieldset {
+  border: 1px solid color-mix(in srgb, CanvasText 24%, transparent);
+  border-radius: 8px;
+}
+
+.row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+}
+
+input,
+select,
+button {
+  box-sizing: border-box;
+  font: inherit;
+}
+
+input,
+select {
+  border: 1px solid color-mix(in srgb, CanvasText 28%, transparent);
+  border-radius: 8px;
+  padding: 8px;
+  width: 100%;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  padding: 8px 14px;
+}
+
+button[type="submit"] {
+  background: #2563eb;
+  color: white;
+}
+
+#status[data-kind="error"] {
+  color: #dc2626;
+}
+
+#status[data-kind="ok"] {
+  color: #16a34a;
+}

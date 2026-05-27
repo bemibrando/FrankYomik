@@ -1,0 +1,10 @@
+{
+  "name": "frank-yomik-extension",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "validate": "node scripts/validate.mjs",
+    "check:js": "node --check src/background/service_worker.js && node --check src/options/options.js && node --check src/content/bootstrap.js"
+  }
+}

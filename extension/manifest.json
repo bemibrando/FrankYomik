@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Frank Yomik",
+  "version": "0.1.0",
+  "description": "Translate Kindle and Naver Webtoon pages through a self-hosted Frank Yomik server.",
+  "action": {
+    "default_title": "Frank Yomik",
+    "default_popup": "src/options/options.html"
+  },
+  "options_page": "src/options/options.html",
+  "permissions": [
+    "alarms",
+    "storage"
+  ],
+  "optional_host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "src/background/service_worker.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://read.amazon.co.jp/*",
+        "https://read.kindle.co.jp/*",
+        "https://comic.naver.com/*",
+        "https://m.comic.naver.com/*"
+      ],
+      "js": [
+        "src/content/bootstrap.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

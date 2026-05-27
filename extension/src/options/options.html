@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Frank Yomik</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main>
+      <h1>Frank Yomik</h1>
+      <p class="lede">Configure the self-hosted server used by the Kindle and Naver Webtoon extension.</p>
+
+      <form id="settings-form">
+        <label>
+          API base URL
+          <input id="api-base-url" name="apiBaseUrl" type="url" placeholder="https://frank.example.net" autocomplete="off">
+        </label>
+
+        <label>
+          Auth token
+          <input id="auth-token" name="authToken" type="password" autocomplete="current-password">
+        </label>
+
+        <fieldset>
+          <legend>Sites</legend>
+          <label class="row"><input id="kindle-enabled" name="kindleEnabled" type="checkbox"> Kindle reader</label>
+          <label class="row"><input id="webtoon-enabled" name="webtoonEnabled" type="checkbox"> Naver Webtoon</label>
+        </fieldset>
+
+        <label>
+          Manga pipeline
+          <select id="manga-pipeline" name="mangaPipeline">
+            <option value="manga_translate">Translate</option>
+            <option value="manga_furigana">Furigana</option>
+          </select>
+        </label>
+
+        <label>
+          Target language
+          <select id="target-language" name="targetLanguage">
+            <option value="en">English</option>
+            <option value="pt-br">Portuguese (Brazil)</option>
+          </select>
+        </label>
+
+        <label>
+          Webtoon prefetch
+          <select id="webtoon-prefetch" name="webtoonPrefetch">
+            <option value="off">Off</option>
+            <option value="nearby">Nearby images</option>
+            <option value="episode">Whole episode (manual)</option>
+          </select>
+        </label>
+
+        <div class="actions">
+          <button type="submit">Save</button>
+          <button id="health-check" type="button">Check server</button>
+        </div>
+      </form>
+
+      <p id="status" role="status" aria-live="polite"></p>
+      <p class="warning">Use HTTPS outside a trusted LAN. Plain HTTP exposes your token and page images to network observers.</p>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
