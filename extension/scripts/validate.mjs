@@ -36,8 +36,16 @@ if (contentScript) {
 }
 
 const forbiddenPermissions = new Set(['tabs', 'webRequest', 'webRequestBlocking', '<all_urls>']);
+const allowedHostPermissions = new Set([
+  'https://image-comic.pstatic.net/*',
+  'https://webtoon-phinf.pstatic.net/*',
+  'https://swebtoon-phinf.pstatic.net/*',
+]);
 for (const permission of manifest.permissions ?? []) {
   if (forbiddenPermissions.has(permission)) fail(`forbidden permission: ${permission}`);
+}
+for (const origin of manifest.host_permissions ?? []) {
+  if (!allowedHostPermissions.has(origin)) fail(`unexpected static host permission: ${origin}`);
 }
 for (const resource of manifest.web_accessible_resources ?? []) {
   if (resource.resources?.includes('*')) fail('web_accessible_resources must not expose *');
@@ -50,6 +58,25 @@ const requiredFiles = [
 ];
 for (const rel of requiredFiles) {
   if (!fs.existsSync(path.join(root, rel))) fail(`referenced file does not exist: ${rel}`);
+}
+
+const serviceWorker = fs.readFileSync(path.join(root, manifest.background.service_worker), 'utf8');
+if (!serviceWorker.includes('async function handleMessage(message, sender)')) {
+  fail('service worker handleMessage must accept sender');
+}
+if (serviceWorker.includes('chrome.permissions.request')) {
+  fail('service worker must not request permissions outside an options-page user gesture');
+}
+
+for (const rel of contentScript?.js ?? []) {
+  const source = fs.readFileSync(path.join(root, rel), 'utf8');
+  if (source.includes('authToken')) fail(`content script must not reference authToken: ${rel}`);
+  if (source.includes('frank-yomik-hud') || source.includes('showStatus')) {
+    fail(`content script must not create visible Frank controls/status overlays: ${rel}`);
+  }
+  if (source.includes("endsWith('.pstatic.net')")) {
+    fail(`content script must use exact webtoon image host allowlists: ${rel}`);
+  }
 }
 
 if (errors.length) {

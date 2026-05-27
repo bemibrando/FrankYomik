@@ -86,7 +86,6 @@
       observer?.observe(img);
 
       if (settings.webtoonPrefetch === 'episode') {
-        maybeForceLazyLoad(img);
         queueImage(img, index, 'episode');
       } else if (settings.webtoonPrefetch !== 'off' && isNearViewport(img, 1600)) {
         queueImage(img, index, 'nearby');
@@ -94,7 +93,8 @@
         queueImage(img, index, 'visible');
       }
 
-      if (!img.complete || img.naturalWidth <= 0) {
+      if ((!img.complete || img.naturalWidth <= 0) && img.dataset.frankLoadListener !== 'true') {
+        img.dataset.frankLoadListener = 'true';
         img.addEventListener('load', () => {
           const currentIndex = findPageImages().indexOf(img);
           if (currentIndex >= 0 && (isNearViewport(img, 1600) || settings.webtoonPrefetch === 'episode')) {
@@ -173,15 +173,21 @@
   }
 
   async function captureImage(src) {
-    const response = await fetch(src, {
-      method: 'GET',
-      credentials: 'include',
-      cache: 'force-cache',
-    });
-    if (!response.ok) throw new Error(`image fetch failed: HTTP ${response.status}`);
-    const blob = await response.blob();
-    if (!blob.type.startsWith('image/')) throw new Error(`unexpected image type: ${blob.type || 'unknown'}`);
-    return blobToDataUrl(blob);
+    try {
+      const response = await fetch(src, {
+        method: 'GET',
+        credentials: 'include',
+        cache: 'force-cache',
+      });
+      if (!response.ok) throw new Error(`image fetch failed: HTTP ${response.status}`);
+      const blob = await response.blob();
+      if (!blob.type.startsWith('image/')) throw new Error(`unexpected image type: ${blob.type || 'unknown'}`);
+      return blobToDataUrl(blob);
+    } catch (error) {
+      const fallback = await chrome.runtime.sendMessage({ type: 'FETCH_WEBTOON_IMAGE', src });
+      if (!fallback?.ok) throw new Error(fallback?.error || error.message || 'image fetch failed');
+      return fallback.imageDataUrl;
+    }
   }
 
   async function handleJobComplete(message) {
@@ -215,17 +221,12 @@
     return img.currentSrc || img.src || img.dataset.src || img.getAttribute('data-lazy-src') || '';
   }
 
-  function maybeForceLazyLoad(img) {
-    const lazySrc = img.dataset.src || img.getAttribute('data-lazy-src');
-    if (lazySrc && !img.src && isAllowedImageUrl(lazySrc)) img.src = lazySrc;
-  }
-
   function isAllowedImageUrl(value) {
     try {
       const url = new URL(value, location.href);
       const host = url.hostname.toLowerCase();
-      if (url.protocol !== 'https:' && url.protocol !== 'http:') return false;
-      return ALLOWED_IMAGE_HOSTS.has(host) || host.endsWith('.pstatic.net');
+      if (url.protocol !== 'https:') return false;
+      return ALLOWED_IMAGE_HOSTS.has(host);
     } catch {
       return false;
     }

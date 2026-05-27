@@ -1,3 +1,5 @@
+import { apiOriginPattern, normalizeApiBaseUrl } from '../shared/config.js';
+
 const form = document.querySelector('#settings-form');
 const statusEl = document.querySelector('#status');
 
@@ -40,7 +42,10 @@ async function loadSettings() {
 
 async function saveSettings() {
   setStatus('Saving…');
-  const response = await sendMessage({ type: 'SAVE_SETTINGS', settings: readSettings() });
+  const settings = readSettings();
+  const permissionGranted = await requestApiPermission(settings.apiBaseUrl);
+  if (!permissionGranted) return;
+  const response = await sendMessage({ type: 'SAVE_SETTINGS', settings });
   if (!response.ok) {
     setStatus(response.error || 'Could not save settings.', 'error');
     return;
@@ -69,6 +74,20 @@ function readSettings() {
     targetLanguage: fields.targetLanguage.value,
     webtoonPrefetch: fields.webtoonPrefetch.value,
   };
+}
+
+async function requestApiPermission(apiBaseUrl) {
+  const normalized = normalizeApiBaseUrl(apiBaseUrl);
+  if (!normalized) return true;
+  const origin = apiOriginPattern(normalized);
+  const alreadyGranted = await chrome.permissions.contains({ origins: [origin] });
+  if (alreadyGranted) return true;
+  const granted = await chrome.permissions.request({ origins: [origin] });
+  if (!granted) {
+    setStatus(`Permission denied for ${origin}.`, 'error');
+    return false;
+  }
+  return true;
 }
 
 function setStatus(message, kind = '') {

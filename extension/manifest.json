@@ -12,6 +12,11 @@
     "alarms",
     "storage"
   ],
+  "host_permissions": [
+    "https://image-comic.pstatic.net/*",
+    "https://webtoon-phinf.pstatic.net/*",
+    "https://swebtoon-phinf.pstatic.net/*"
+  ],
   "optional_host_permissions": [
     "http://*/*",
     "https://*/*"

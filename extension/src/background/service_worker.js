@@ -14,11 +14,15 @@ const POLL_DELAY_MS = 3_000;
 const JOB_TIMEOUT_MS = 5 * 60_000;
 const MAX_CACHE_ENTRIES = 200;
 const MAX_CAPTURE_DATA_URL_BYTES = 28 * 1024 * 1024;
+const MAX_RESULT_IMAGE_BYTES = 25 * 1024 * 1024;
+const MAX_CACHE_BYTES = 200 * 1024 * 1024;
 const DB_NAME = 'frank-yomik-extension';
 const DB_VERSION = 1;
 const IMAGE_STORE = 'images';
 
 let pollTimer = null;
+
+restrictStorageAccess();
 
 chrome.runtime.onInstalled.addListener(() => {
   restrictStorageAccess();
@@ -43,7 +47,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
-async function handleMessage(message) {
+async function handleMessage(message, sender) {
   if (!message || typeof message !== 'object') {
     throw new Error('invalid message');
   }
@@ -52,12 +56,17 @@ async function handleMessage(message) {
     case 'GET_SETTINGS':
       return { ok: true, settings: await getSettingsForSender(sender) };
     case 'SAVE_SETTINGS':
+      assertExtensionPage(sender, 'SAVE_SETTINGS');
       return saveSettings(message.settings || {});
     case 'CHECK_HEALTH':
+      assertExtensionPage(sender, 'CHECK_HEALTH');
       return checkHealth();
     case 'SUBMIT_CAPTURE':
       return submitCapture(message, sender);
+    case 'FETCH_WEBTOON_IMAGE':
+      return fetchWebtoonImage(message, sender);
     case 'GET_ACTIVE_JOBS':
+      assertExtensionPage(sender, 'GET_ACTIVE_JOBS');
       return { ok: true, jobs: await loadActiveJobs() };
     default:
       throw new Error(`unknown message type: ${message.type}`);
@@ -87,9 +96,9 @@ async function saveSettings(rawSettings) {
   const settings = normalizeSettings(rawSettings);
   if (settings.apiBaseUrl) {
     const origin = apiOriginPattern(settings.apiBaseUrl);
-    const granted = await chrome.permissions.request({ origins: [origin] });
+    const granted = await chrome.permissions.contains({ origins: [origin] });
     if (!granted) {
-      throw new Error(`API host permission denied for ${origin}`);
+      throw new Error(`API host permission has not been granted for ${origin}`);
     }
   }
   await chrome.storage.local.set({ [STORAGE_KEYS.settings]: settings });
@@ -211,11 +220,46 @@ async function submitCapture(message, sender) {
   });
 }
 
+async function fetchWebtoonImage(message, sender) {
+  const site = validateSender(sender);
+  if (site !== 'webtoon') throw new Error('webtoon image fetch is only allowed from Naver Webtoon pages');
+  const url = validateAllowedWebtoonImageUrl(message.src);
+  const response = await fetchWithTimeout(url.toString(), {
+    method: 'GET',
+    cache: 'force-cache',
+    credentials: 'omit',
+    redirect: 'error',
+  }, 30_000);
+  if (!response.ok) throw new Error(`image fetch failed: HTTP ${response.status}`);
+  const blob = await response.blob();
+  if (blob.size > MAX_CAPTURE_DATA_URL_BYTES) throw new Error('webtoon source image is too large');
+  if (blob.type && !blob.type.startsWith('image/')) throw new Error(`unexpected image type: ${blob.type}`);
+  return { ok: true, imageDataUrl: await blobToDataUrl(blob) };
+}
+
+function validateAllowedWebtoonImageUrl(value) {
+  let url;
+  try {
+    url = new URL(String(value || ''));
+  } catch {
+    throw new Error('invalid webtoon image URL');
+  }
+  const allowedHosts = new Set([
+    'image-comic.pstatic.net',
+    'webtoon-phinf.pstatic.net',
+    'swebtoon-phinf.pstatic.net',
+  ]);
+  if (url.protocol !== 'https:') throw new Error('webtoon image URL must use https');
+  if (!allowedHosts.has(url.hostname.toLowerCase())) throw new Error('webtoon image host is not allowed');
+  return url;
+}
+
 async function queueJobRecord({ response, sender, pageId, site, sourceHash, pipeline, cachePipeline, cacheKey, capture }) {
   const jobId = String(response.job_id || '');
   if (!jobId) throw new Error('server response did not include job_id');
 
   const job = {
+    recordId: '',
     jobId,
     pageId,
     site,
@@ -229,8 +273,9 @@ async function queueJobRecord({ response, sender, pageId, site, sourceHash, pipe
     lastPollAt: 0,
     status: response.status || 'queued',
   };
+  job.recordId = `${jobId}|${pageId}|${Date.now()}|${Math.random().toString(36).slice(2, 8)}`;
   const jobs = await loadActiveJobs();
-  jobs[jobId] = job;
+  jobs[job.recordId] = job;
   await saveActiveJobs(jobs);
   schedulePollSoon();
   return { ok: true, status: 'queued', pageId, site, jobId, sourceHash, pipeline, capture };
@@ -249,6 +294,10 @@ function validateSender(sender) {
   if (KINDLE_HOSTS.has(host)) return 'kindle';
   if (NAVER_WEBTOON_HOSTS.has(host)) return 'webtoon';
   throw new Error(`unsupported sender host: ${host}`);
+}
+
+function assertExtensionPage(sender, messageType) {
+  if (sender?.tab) throw new Error(`${messageType} is not allowed from content scripts`);
 }
 
 function pipelineForSite(site, settings, requestedPipeline) {
@@ -295,17 +344,29 @@ async function getJobStatus(settings, jobId) {
 }
 
 async function downloadImageDataUrl(settings, imageUrl) {
-  const url = imageUrl.startsWith('http') ? imageUrl : `${settings.apiBaseUrl}${imageUrl}`;
+  const url = normalizeApiImageUrl(settings, imageUrl);
   return withRetry(async () => {
     const response = await fetchWithTimeout(url, {
       method: 'GET',
       headers: authHeaders(settings),
       cache: 'no-store',
+      redirect: 'error',
     }, 45_000);
     if (!response.ok) throw retryableError(`image download failed: HTTP ${response.status}`, response.status >= 500);
     const blob = await response.blob();
+    if (blob.size > MAX_RESULT_IMAGE_BYTES) throw new Error('translated image is too large');
+    if (blob.type && !blob.type.startsWith('image/')) throw new Error(`translated result is not an image: ${blob.type}`);
     return blobToDataUrl(blob);
   });
+}
+
+function normalizeApiImageUrl(settings, imageUrl) {
+  const api = new URL(settings.apiBaseUrl);
+  const resolved = imageUrl.startsWith('http') ? new URL(imageUrl) : new URL(imageUrl, settings.apiBaseUrl);
+  if (resolved.origin !== api.origin) {
+    throw new Error('refusing to download cross-origin result image');
+  }
+  return resolved.toString();
 }
 
 async function pollActiveJobs() {
@@ -317,8 +378,9 @@ async function pollActiveJobs() {
 
   let changed = false;
   for (const job of entries) {
+    const recordId = job.recordId || job.jobId;
     if (Date.now() - job.submittedAt > JOB_TIMEOUT_MS) {
-      delete jobs[job.jobId];
+      delete jobs[recordId];
       changed = true;
       await notifyTab(job, { type: 'FRANK_JOB_FAILED', pageId: job.pageId, jobId: job.jobId, error: 'Job timed out' });
       continue;
@@ -335,7 +397,7 @@ async function pollActiveJobs() {
           pipeline: job.cachePipeline,
           targetLanguage: settings.targetLanguage,
         });
-        delete jobs[job.jobId];
+        delete jobs[recordId];
         changed = true;
         await notifyTab(job, {
           type: 'FRANK_JOB_COMPLETE',
@@ -348,7 +410,7 @@ async function pollActiveJobs() {
           capture: job.capture,
         });
       } else if (status.status === 'failed') {
-        delete jobs[job.jobId];
+        delete jobs[recordId];
         changed = true;
         await notifyTab(job, {
           type: 'FRANK_JOB_FAILED',
@@ -556,10 +618,16 @@ async function evictCacheIfNeeded() {
     const transaction = db.transaction(IMAGE_STORE, 'readwrite');
     const store = transaction.objectStore(IMAGE_STORE);
     const entries = await idbRequest(store.getAll());
-    if (entries.length <= MAX_CACHE_ENTRIES) return;
+    let totalBytes = entries.reduce((sum, entry) => sum + Number(entry.bytes || entry.dataUrl?.length || 0), 0);
+    if (entries.length <= MAX_CACHE_ENTRIES && totalBytes <= MAX_CACHE_BYTES) return;
     entries.sort((a, b) => (a.lastAccessed || 0) - (b.lastAccessed || 0));
-    const overflow = entries.slice(0, entries.length - MAX_CACHE_ENTRIES);
-    await Promise.all(overflow.map((entry) => idbRequest(store.delete(entry.key))));
+    const toDelete = [];
+    while ((entries.length - toDelete.length > MAX_CACHE_ENTRIES || totalBytes > MAX_CACHE_BYTES) && entries.length > toDelete.length) {
+      const entry = entries[toDelete.length];
+      toDelete.push(entry);
+      totalBytes -= Number(entry.bytes || entry.dataUrl?.length || 0);
+    }
+    await Promise.all(toDelete.map((entry) => idbRequest(store.delete(entry.key))));
   } finally {
     db.close();
   }

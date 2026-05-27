@@ -18,7 +18,7 @@
   async function applyKindleResult(result) {
     if (!result?.imageDataUrl) return false;
     const capture = result.capture || {};
-    const target = findKindleTarget(capture);
+    const target = findKindleTarget(capture, result.pageId);
     if (!target) return false;
 
     if (target.dataset.frankPageId === result.pageId && target.dataset.frankTranslatedSrc) {
@@ -41,7 +41,7 @@
     return true;
   }
 
-  function findKindleTarget(capture) {
+  function findKindleTarget(capture, pageId) {
     const expected = capture.imgSrc || '';
     const expectedRect = capture.rect;
     const readerRoot = findReaderRoot();
@@ -55,6 +55,9 @@
     let bestScore = -Infinity;
     for (const img of imgs) {
       if (!img.src || !(img.src.startsWith('blob:') || img.dataset.frankTranslated === 'true')) continue;
+      if (img.dataset.frankTranslated === 'true' && img.dataset.frankPageId && img.dataset.frankPageId !== pageId) {
+        continue;
+      }
       const rect = img.getBoundingClientRect();
       if (rect.width < 100 || rect.height < 100) continue;
       let overlap = overlapAreaInViewport(rect, vw, vh);
@@ -98,6 +101,7 @@
     if (originalSrc) {
       const exact = imgs.find((img) => img.src === originalSrc || img.dataset.frankOriginalSrc === originalSrc);
       if (exact) return exact;
+      return null;
     }
     if (pageId?.startsWith('wt-')) {
       const wtIndex = pageId.replace('wt-', '');

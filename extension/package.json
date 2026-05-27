@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "test": "npm run validate && npm run check:js",
     "validate": "node scripts/validate.mjs",
     "check:js": "node --check src/background/service_worker.js && node --check src/options/options.js && node --check src/content/bootstrap.js && node --check src/content/kindle.js && node --check src/content/webtoon.js && node --check src/content/overlay.js && node --check src/shared/config.js"
   }
