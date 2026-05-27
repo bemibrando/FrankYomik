@@ -18,6 +18,10 @@ from .config import (
 
 # Padding around each text element's white background
 _TEXT_BG_PAD = 2
+_HORIZONTAL_MASK_VERTICAL_INSET_PCT = 15
+_HORIZONTAL_MASK_WIDTH_PCT = 30
+_VERTICAL_MASK_VERTICAL_INSET_PCT = 5
+_VERTICAL_MASK_WIDTH_PCT = 70
 
 log = logging.getLogger(__name__)
 
@@ -143,11 +147,12 @@ def _mask_safe_bbox(bbox: tuple[int, int, int, int],
     """Compute a tighter bbox that fits inside the bubble mask.
 
     For each row in the mask, find the horizontal extent of filled pixels.
-    In horizontal mode (default): uses 15% vertical inset and 30th-percentile
-    width — conservative to prevent lines near the top/bottom from overflowing
-    oval bubbles.  In vertical mode: uses 8% vertical inset and median width,
-    since vertical Japanese text stacks characters individually and mask-clips
-    per-character.
+    In horizontal mode (default): uses a larger vertical inset and conservative
+    width — this prevents full lines near the top/bottom from overflowing oval
+    bubbles.  In vertical mode: uses a smaller vertical inset and a wider
+    percentile span because Japanese text stacks characters individually and the
+    rendered overlay is still clipped by the mask. This helps soft/stylized
+    bubbles use more of their available interior without drawing outside them.
     """
     x1, y1, x2, y2 = bbox
     crop = mask[y1:y2, x1:x2]
@@ -164,18 +169,19 @@ def _mask_safe_bbox(bbox: tuple[int, int, int, int],
     mask_top, mask_bot = int(filled[0]), int(filled[-1])
     mask_h = mask_bot - mask_top + 1
 
-    # Vertical inset: 8% for vertical Japanese (characters clip individually),
-    # 15% for horizontal English (lines can overflow narrow oval edges).
-    v_pct = 8 if vertical else 15
+    # Vertical Japanese can use more of the mask than horizontal English because
+    # each glyph is placed independently and the final overlay is mask-clipped.
+    v_pct = (_VERTICAL_MASK_VERTICAL_INSET_PCT if vertical
+             else _HORIZONTAL_MASK_VERTICAL_INSET_PCT)
     v_inset = max(2, mask_h * v_pct // 100)
     safe_top = mask_top + v_inset
     safe_bot = mask_bot - v_inset
     if safe_top >= safe_bot:
         return bbox
 
-    # Horizontal: use 30th-percentile width (safe for ~60% of rows).
-    # This is more conservative than median, avoiding clipping on the
-    # narrower rows near the edges of the safe vertical range.
+    # Horizontal: use conservative width to avoid clipping whole lines near oval
+    # edges. Vertical: use a wider span so jagged/stylized bubbles do not get
+    # reduced to their median-width core.
     lefts = []
     rights = []
     for r in range(safe_top, safe_bot + 1):
@@ -187,9 +193,8 @@ def _mask_safe_bbox(bbox: tuple[int, int, int, int],
     if not lefts:
         return bbox
 
-    # Vertical text uses median (50th pct) — less conservative since
-    # characters are individually mask-clipped.  Horizontal uses 30th pct.
-    width_pct = 50 if vertical else 30
+    width_pct = (_VERTICAL_MASK_WIDTH_PCT if vertical
+                 else _HORIZONTAL_MASK_WIDTH_PCT)
     safe_left = int(np.percentile(lefts, 100 - width_pct))
     safe_right = int(np.percentile(rights, width_pct))
 
@@ -705,15 +710,11 @@ def _fit_vertical_font_size(chars: list[dict], bw: int, bh: int) -> int:
         col_width = mid + furi_extra
         char_height = int(mid * 1.05)
 
-        # Reserve space for the first column's furigana extending past the rightmost kanji
-        furi_offset = (_furigana_font_size(mid) + 2) if has_furigana else 0
-        available_width = bw - furi_offset
-
         chars_per_col = max(1, bh // char_height)
         cols_needed = (n + chars_per_col - 1) // chars_per_col
         total_width = cols_needed * col_width
 
-        if total_width <= available_width:
+        if total_width <= bw:
             best = mid
             lo = mid + 1
         else:

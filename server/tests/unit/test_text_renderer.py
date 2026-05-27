@@ -1,5 +1,6 @@
 """Regression tests for text rendering: SFX detection, hyphenation, word wrap."""
 
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from kindle.text_renderer import (
     _is_sound_effect,
@@ -7,6 +8,8 @@ from kindle.text_renderer import (
     _break_word_to_fit,
     _choose_layout,
     _furigana_font_size,
+    _fit_vertical_font_size,
+    _mask_safe_bbox,
 )
 from kindle.config import FONT_EN
 
@@ -70,6 +73,34 @@ class TestFuriganaSizing:
 
     def test_furigana_size_keeps_minimum(self):
         assert _furigana_font_size(12) == 10
+
+    def test_fit_uses_rendered_width_without_extra_furigana_reserve(self):
+        chars = [{"char": "今", "furigana": "きょう"} for _ in range(8)]
+
+        # With a 90px-wide bubble, 29px main text renders as two columns:
+        #   2 * (29 main + 14 furigana + 2 gap) == 90px.
+        # The fitter should allow that exact rendered width instead of
+        # subtracting another furigana column from the available width.
+        assert _fit_vertical_font_size(chars, bw=90, bh=200) == 29
+
+
+class TestMaskSafeBBox:
+    """Mask-safe vertical text bounds should not over-shrink jagged bubbles."""
+
+    def test_vertical_uses_more_jagged_mask_width_than_horizontal(self):
+        mask = np.zeros((120, 100), dtype=np.uint8)
+        for y in range(10, 110):
+            if y % 4 < 2:
+                mask[y, 5:95] = 255
+            else:
+                mask[y, 20:80] = 255
+
+        horizontal = _mask_safe_bbox((0, 0, 100, 120), mask, vertical=False)
+        vertical = _mask_safe_bbox((0, 0, 100, 120), mask, vertical=True)
+
+        assert vertical[0] < horizontal[0]
+        assert vertical[2] > horizontal[2]
+        assert vertical[3] - vertical[1] > horizontal[3] - horizontal[1]
 
 
 class TestWordWrap:

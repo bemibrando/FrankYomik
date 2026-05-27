@@ -28,6 +28,7 @@ services:
   api:
     image: localhost:3007/akitaonrails/frank-yomik-api:latest
     container_name: yomik-api
+    user: "${APP_UID:-1026}:${APP_GID:-1026}"
     security_opt:
       - label:disable
     ports:
