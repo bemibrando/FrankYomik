@@ -29,6 +29,8 @@
         "https://m.comic.naver.com/*"
       ],
       "js": [
+        "src/content/overlay.js",
+        "src/content/kindle.js",
         "src/content/bootstrap.js"
       ],
       "run_at": "document_idle"

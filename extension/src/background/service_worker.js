@@ -50,7 +50,7 @@ async function handleMessage(message) {
 
   switch (message.type) {
     case 'GET_SETTINGS':
-      return { ok: true, settings: await getSettingsForUi() };
+      return { ok: true, settings: await getSettingsForSender(sender) };
     case 'SAVE_SETTINGS':
       return saveSettings(message.settings || {});
     case 'CHECK_HEALTH':
@@ -69,8 +69,18 @@ async function getSettings() {
   return normalizeSettings(stored[STORAGE_KEYS.settings] || DEFAULT_SETTINGS);
 }
 
-async function getSettingsForUi() {
-  return getSettings();
+async function getSettingsForSender(sender) {
+  const settings = await getSettings();
+  if (!sender?.tab) return settings;
+  return {
+    apiBaseUrl: settings.apiBaseUrl,
+    configured: Boolean(settings.apiBaseUrl && settings.authToken),
+    kindleEnabled: settings.kindleEnabled,
+    webtoonEnabled: settings.webtoonEnabled,
+    mangaPipeline: settings.mangaPipeline,
+    targetLanguage: settings.targetLanguage,
+    webtoonPrefetch: settings.webtoonPrefetch,
+  };
 }
 
 async function saveSettings(rawSettings) {

@@ -1,0 +1,184 @@
+(function frankOverlayModule() {
+  'use strict';
+
+  if (window.FrankOverlay) return;
+
+  const objectUrls = new Set();
+
+  window.addEventListener('pagehide', () => {
+    for (const url of objectUrls) URL.revokeObjectURL(url);
+    objectUrls.clear();
+  });
+
+  window.FrankOverlay = {
+    applyKindleResult,
+    applyWebtoonResult,
+  };
+
+  async function applyKindleResult(result) {
+    if (!result?.imageDataUrl) return false;
+    const capture = result.capture || {};
+    const target = findKindleTarget(capture);
+    if (!target) return false;
+
+    if (target.dataset.frankPageId === result.pageId && target.dataset.frankTranslatedSrc) {
+      return true;
+    }
+
+    const blobUrl = await objectUrlFromDataUrl(result.imageDataUrl);
+    target.src = blobUrl;
+    target.dataset.frankTranslated = 'true';
+    target.dataset.frankPageId = result.pageId || '';
+    target.dataset.frankTranslatedSrc = blobUrl;
+    if (capture.groupId) target.dataset.frankGroupId = capture.groupId;
+
+    if (typeof target.decode === 'function') {
+      target.decode().catch(() => {}).finally(() => nudgeCompositor(target));
+    } else {
+      nudgeCompositor(target);
+    }
+
+    return true;
+  }
+
+  function findKindleTarget(capture) {
+    const expected = capture.imgSrc || '';
+    const expectedRect = capture.rect;
+    const readerRoot = findReaderRoot();
+    let imgs = Array.from(readerRoot.querySelectorAll('img'));
+    if (!imgs.length) imgs = Array.from(document.querySelectorAll('img'));
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const rootRect = readerRoot.getBoundingClientRect ? readerRoot.getBoundingClientRect() : null;
+
+    let best = null;
+    let bestScore = -Infinity;
+    for (const img of imgs) {
+      if (!img.src || !(img.src.startsWith('blob:') || img.dataset.frankTranslated === 'true')) continue;
+      const rect = img.getBoundingClientRect();
+      if (rect.width < 100 || rect.height < 100) continue;
+      let overlap = overlapAreaInViewport(rect, vw, vh);
+      if (overlap < 2000) continue;
+      if (rootRect && readerRoot !== document.body) {
+        const rootOverlap = overlapArea(rect, rootRect);
+        if (rootOverlap < 2000) continue;
+        overlap = Math.min(overlap, rootOverlap);
+      }
+      if (!isActuallyVisible(img)) continue;
+
+      if (expected && img.src !== expected && img.dataset.frankTranslated !== 'true') continue;
+      const exact = expected && img.src === expected ? 2_000_000_000 : 0;
+      const alreadyTranslated = img.dataset.frankTranslated === 'true' ? 1_000_000_000 : 0;
+      const score = exact + alreadyTranslated + (topLayerHits(img) * 100_000_000) + overlap + rectBiasScore(rect, expectedRect);
+      if (score > bestScore) {
+        bestScore = score;
+        best = img;
+      }
+    }
+    return best;
+  }
+
+  async function applyWebtoonResult(result) {
+    if (!result?.imageDataUrl) return false;
+    const capture = result.capture || {};
+    const img = findWebtoonTarget(result.pageId, capture.originalSrc, capture.index);
+    if (!img) return false;
+    const blobUrl = await objectUrlFromDataUrl(result.imageDataUrl);
+    img.src = blobUrl;
+    img.dataset.frankTranslated = 'true';
+    img.dataset.frankPageId = result.pageId || '';
+    img.dataset.frankTranslatedSrc = blobUrl;
+    if (typeof img.decode === 'function') img.decode().catch(() => {}).finally(() => nudgeCompositor(img));
+    else nudgeCompositor(img);
+    return true;
+  }
+
+  function findWebtoonTarget(pageId, originalSrc, index) {
+    const imgs = Array.from(document.querySelectorAll('img'));
+    if (originalSrc) {
+      const exact = imgs.find((img) => img.src === originalSrc || img.dataset.frankOriginalSrc === originalSrc);
+      if (exact) return exact;
+    }
+    if (pageId?.startsWith('wt-')) {
+      const wtIndex = pageId.replace('wt-', '');
+      const byData = imgs.find((img) => img.dataset.frankIndex === wtIndex);
+      if (byData) return byData;
+    }
+    const toonImgs = Array.from(document.querySelectorAll('img.toon_image'));
+    const numericIndex = Number(index);
+    if (Number.isInteger(numericIndex) && numericIndex >= 0 && numericIndex < toonImgs.length) {
+      return toonImgs[numericIndex];
+    }
+    return null;
+  }
+
+  function findReaderRoot() {
+    return document.querySelector(
+      '#kr-renderer, #kindle-reader-content, .reader-content, ' +
+      '[id*="kindle-reader"], [id*="kr-renderer"], [class*="reader-content"]',
+    ) || document.body;
+  }
+
+  function isActuallyVisible(el) {
+    const style = window.getComputedStyle(el);
+    if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
+    const opacity = Number.parseFloat(style.opacity || '1');
+    return !Number.isFinite(opacity) || opacity > 0.05;
+  }
+
+  function topLayerHits(el) {
+    const rect = el.getBoundingClientRect();
+    const points = [
+      [rect.left + rect.width / 2, rect.top + rect.height / 2],
+      [rect.left + rect.width * 0.25, rect.top + rect.height / 2],
+      [rect.left + rect.width * 0.75, rect.top + rect.height / 2],
+    ];
+    let hits = 0;
+    for (const [rawX, rawY] of points) {
+      const x = Math.max(0, Math.min(window.innerWidth - 1, rawX));
+      const y = Math.max(0, Math.min(window.innerHeight - 1, rawY));
+      const top = document.elementFromPoint(x, y);
+      if (top && (top === el || el.contains(top) || top.contains(el))) hits += 1;
+    }
+    return hits;
+  }
+
+  function rectBiasScore(rect, expectedRect) {
+    if (!expectedRect) return 0;
+    const ew = Math.max(1, Number(expectedRect.width || 1));
+    const eh = Math.max(1, Number(expectedRect.height || 1));
+    const ecx = Number(expectedRect.x || 0) + ew / 2;
+    const ecy = Number(expectedRect.y || 0) + eh / 2;
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    const centerDist = Math.hypot(cx - ecx, cy - ecy);
+    const sizeErr = Math.abs(rect.width - ew) / ew + Math.abs(rect.height - eh) / eh;
+    return -((centerDist * 800) + (sizeErr * 500_000));
+  }
+
+  function overlapAreaInViewport(rect, vw, vh) {
+    const ox = Math.min(rect.right, vw) - Math.max(rect.left, 0);
+    const oy = Math.min(rect.bottom, vh) - Math.max(rect.top, 0);
+    return ox <= 0 || oy <= 0 ? 0 : ox * oy;
+  }
+
+  function overlapArea(a, b) {
+    const ox = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+    const oy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+    return ox <= 0 || oy <= 0 ? 0 : ox * oy;
+  }
+
+  async function objectUrlFromDataUrl(dataUrl) {
+    const response = await fetch(dataUrl);
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    objectUrls.add(objectUrl);
+    return objectUrl;
+  }
+
+  function nudgeCompositor(img) {
+    img.style.opacity = '0.999';
+    void img.offsetWidth;
+    img.style.opacity = '';
+  }
+})();

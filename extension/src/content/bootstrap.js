@@ -16,8 +16,20 @@
   chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (response) => {
     if (chrome.runtime.lastError || !response?.ok) return;
     const settings = response.settings || {};
+    if (!settings.configured) {
+      console.info('[Frank] extension is installed but not configured');
+      return;
+    }
     if (site === 'kindle' && settings.kindleEnabled === false) return;
     if (site === 'webtoon' && settings.webtoonEnabled === false) return;
-    console.info(`[Frank] ${site} extension bootstrap ready`);
+    if (site === 'kindle' && window.FrankKindle) {
+      window.FrankKindle.start(settings);
+      return;
+    }
+    if (site === 'webtoon' && window.FrankWebtoon) {
+      window.FrankWebtoon.start(settings);
+      return;
+    }
+    console.info(`[Frank] ${site} extension bootstrap ready; strategy not loaded yet`);
   });
 })();
