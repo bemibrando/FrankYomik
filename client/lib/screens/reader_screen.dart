@@ -9,6 +9,7 @@ import '../providers/connection_provider.dart';
 import '../providers/jobs_provider.dart';
 import '../providers/settings_provider.dart';
 import '../services/image_capture_service.dart';
+import '../utils/kindle_priority.dart';
 import '../webview/dom_inspector.dart';
 import '../webview/js_bridge.dart';
 import '../webview/overlay_controller.dart';
@@ -50,6 +51,8 @@ class ReaderScreen extends ConsumerStatefulWidget {
 
 class _ReaderScreenState extends ConsumerState<ReaderScreen>
     with WidgetsBindingObserver {
+  static const _kindleCaptureDebounce = Duration(milliseconds: 550);
+
   AppWebViewController? _webController;
   final _jsBridge = JsBridge();
   final _inspector = DomInspector();
@@ -77,6 +80,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   int _kindleOverlayOk = 0;
   int _kindleOverlayFail = 0;
   int _kindleOverlayFallback = 0;
+  Timer? _kindleCaptureDebounceTimer;
 
   /// Selected pipeline for Kindle pages (furigana vs english translation).
   /// Initialized from global settings in initState, overridden per-volume.
@@ -119,6 +123,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     WidgetsBinding.instance.removeObserver(this);
     _statusClearTimer?.cancel();
     _progressSyncTimer?.cancel();
+    _kindleCaptureDebounceTimer?.cancel();
     _cancelKindleReapplies();
     for (final sub in _completionListeners.values) {
       sub.close();
@@ -384,7 +389,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
     final settings = ref.read(settingsProvider);
     final autoOn = settings.isLoaded && settings.autoTranslate;
-    debugPrint('[PageFlow] $pageId autoOn=$autoOn loaded=${settings.isLoaded} autoTranslate=${settings.autoTranslate}');
+    debugPrint(
+      '[PageFlow] $pageId autoOn=$autoOn loaded=${settings.isLoaded} autoTranslate=${settings.autoTranslate}',
+    );
     _syncTranslateButtonState();
     final isKindle = _jsBridge.activeStrategy?.siteName == 'kindle';
     if (isKindle && autoOn) {
@@ -395,7 +402,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     final pageMode = pageInfo['pageMode'] as String?;
     if (pageMode == 'spread') {
       if (!autoOn) return;
-      _handleSpreadDetection(pageId, pageInfo);
+      _scheduleKindleCapture(pageId, pageInfo);
       return;
     }
 
@@ -444,8 +451,21 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       return;
     }
 
-    // Capture and submit
-    _capturePageImage(pageId, pageInfo);
+    // Capture and submit after a short settle window. Rapid Kindle page flips
+    // replace this pending capture so transient pages do not crowd the queue.
+    _scheduleKindleCapture(pageId, pageInfo);
+  }
+
+  void _scheduleKindleCapture(String pageId, Map<String, dynamic> pageInfo) {
+    _kindleCaptureDebounceTimer?.cancel();
+    _kindleCaptureDebounceTimer = Timer(_kindleCaptureDebounce, () {
+      if (!mounted || _currentKindlePageId != pageId) return;
+      if ((pageInfo['pageMode'] as String?) == 'spread') {
+        _handleSpreadDetection(pageId, pageInfo);
+      } else {
+        _capturePageImage(pageId, pageInfo);
+      }
+    });
   }
 
   /// Handle spread detection: check if L/R sub-pages are already processed.
@@ -485,7 +505,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     } else {
       // Jobs exist but not both complete — re-establish a listener so the
       // overlay is applied when they finish (e.g. user navigated away and back).
-      debugPrint('[PageFlow] $spreadPageId → watch L=${leftJob?.status} R=${rightJob?.status}');
+      debugPrint(
+        '[PageFlow] $spreadPageId → watch L=${leftJob?.status} R=${rightJob?.status}',
+      );
       _watchForSpreadCompletion(spreadPageId, leftId, rightId);
     }
   }
@@ -524,10 +546,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
       // evaluations execute; targeting the known blob URL avoids capturing
       // the wrong page.
       final blobSrc = pageInfo['imgSrc'] as String?;
-      final captureScript =
-          blobSrc != null && blobSrc.startsWith('blob:')
-              ? KindleStrategy.captureByBlobSrcScript(blobSrc)
-              : KindleStrategy.captureCurrentPageScript;
+      final captureScript = blobSrc != null && blobSrc.startsWith('blob:')
+          ? KindleStrategy.captureByBlobSrcScript(blobSrc)
+          : KindleStrategy.captureCurrentPageScript;
       final dataUrl = await controller.evaluateJavascript(
         source: captureScript,
       );
@@ -566,6 +587,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         });
 
         final meta = _jsBridge.parseCurrentUrl(_currentUrl);
+        final priorityMeta = kindlePriorityMetadataForPage(
+          pageId: pageId,
+          title: meta?.title,
+        );
 
         // Submit left and right halves as separate jobs.
         // Kindle pages do NOT pass pageNumber — the DOM page indicator is
@@ -574,22 +599,34 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
         final spreadPipeline = _jsBridge.activeStrategy?.siteName == 'kindle'
             ? _kindlePipeline
             : _jsBridge.activeStrategy?.defaultPipeline;
-        final leftFuture = ref.read(jobsProvider.notifier).submitPage(
-          pageId: leftId,
-          imageBytes: halves.$1,
-          pipeline: spreadPipeline,
-          title: meta?.title,
-          chapter: meta?.chapter,
-          sourceUrl: _currentUrl,
-        );
-        final rightFuture = ref.read(jobsProvider.notifier).submitPage(
-          pageId: rightId,
-          imageBytes: halves.$2,
-          pipeline: spreadPipeline,
-          title: meta?.title,
-          chapter: meta?.chapter,
-          sourceUrl: _currentUrl,
-        );
+        final leftFuture = ref
+            .read(jobsProvider.notifier)
+            .submitPage(
+              pageId: leftId,
+              imageBytes: halves.$1,
+              pipeline: spreadPipeline,
+              title: meta?.title,
+              chapter: meta?.chapter,
+              sourceUrl: _currentUrl,
+              sourceSite: priorityMeta?.sourceSite,
+              latestGroup: priorityMeta?.latestGroup,
+              latestToken: priorityMeta?.latestToken,
+              latestSeq: priorityMeta?.latestSeq,
+            );
+        final rightFuture = ref
+            .read(jobsProvider.notifier)
+            .submitPage(
+              pageId: rightId,
+              imageBytes: halves.$2,
+              pipeline: spreadPipeline,
+              title: meta?.title,
+              chapter: meta?.chapter,
+              sourceUrl: _currentUrl,
+              sourceSite: priorityMeta?.sourceSite,
+              latestGroup: priorityMeta?.latestGroup,
+              latestToken: priorityMeta?.latestToken,
+              latestSeq: priorityMeta?.latestSeq,
+            );
         await Future.wait([leftFuture, rightFuture], eagerError: false);
 
         _watchForSpreadCompletion(pageId, leftId, rightId);
@@ -667,6 +704,9 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     // Kindle: skip pageNumber — DOM text is unreliable, hash cache handles re-visits.
     // Webtoon: use image index. Others: URL-derived page number.
     final isKindle = _jsBridge.activeStrategy?.siteName == 'kindle';
+    final priorityMeta = isKindle
+        ? kindlePriorityMetadataForPage(pageId: pageId, title: meta?.title)
+        : null;
     final pageNumber = isKindle
         ? null
         : (pageInfo['index']?.toString() ?? meta?.pageNumber);
@@ -681,6 +721,10 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
           chapter: meta?.chapter,
           pageNumber: pageNumber,
           sourceUrl: _currentUrl,
+          sourceSite: priorityMeta?.sourceSite,
+          latestGroup: priorityMeta?.latestGroup,
+          latestToken: priorityMeta?.latestToken,
+          latestSeq: priorityMeta?.latestSeq,
         );
     submitSw.stop();
     debugPrint(
@@ -1444,6 +1488,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
 
     // Cancel all Kindle jobs and re-submit current page with new pipeline
     _cancelKindleJobs();
+    _kindleCaptureDebounceTimer?.cancel();
     if (_currentKindlePageId != null && _lastKindlePageInfo != null) {
       _capturePageImage(_currentKindlePageId!, _lastKindlePageInfo!);
     }
@@ -1454,6 +1499,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _showKindleSpinner();
     _updateInPageStatus('Translating...');
     if (_currentKindlePageId != null && _lastKindlePageInfo != null) {
+      _kindleCaptureDebounceTimer?.cancel();
       _capturePageImage(_currentKindlePageId!, _lastKindlePageInfo!);
       return;
     }

@@ -195,6 +195,16 @@ If you change the job payload or metadata shape, check all three spots:
 - `server/worker/consumer.py`
 - `client/lib/providers/jobs_provider.dart`
 
+If you change reader/capture/job-submission behavior in one client, keep the
+other client in sync before finishing:
+
+- Flutter client: `client/lib/screens/reader_screen.dart`, `client/lib/services/api_service.dart`, `client/lib/providers/jobs_provider.dart`
+- Chromium extension: `extension/src/content/`, `extension/src/background/service_worker.js`, `extension/src/shared/`
+
+This includes Kindle/Naver detection, capture batching, job metadata fields,
+priority/session sequencing, cache/download fallback, diagnostics, and API
+request shape.
+
 If you change WebView capture behavior, test both:
 
 - Kindle single-page and spread-page capture

@@ -41,7 +41,10 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
   WebSocketService get _ws => _ref.read(wsServiceProvider);
   CacheService get _cache => _ref.read(cacheServiceProvider);
 
-  Future<T> _withRetry<T>(Future<T> Function() action, {int maxAttempts = 3}) async {
+  Future<T> _withRetry<T>(
+    Future<T> Function() action, {
+    int maxAttempts = 3,
+  }) async {
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         return await action();
@@ -69,6 +72,10 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     String? chapter,
     String? pageNumber,
     String? sourceUrl,
+    String? sourceSite,
+    String? latestGroup,
+    String? latestToken,
+    int? latestSeq,
     String priority = 'high',
     String? targetLanguage,
   }) async {
@@ -147,17 +154,23 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     state = {...state, pageId: job};
 
     try {
-      final response = await _withRetry(() => _api.submitJob(
-        settings: _settings,
-        imageBytes: imageBytes,
-        pipeline: effectivePipeline,
-        title: title,
-        chapter: chapter,
-        pageNumber: pageNumber,
-        sourceUrl: sourceUrl,
-        priority: priority,
-        targetLanguage: targetLanguage,
-      ));
+      final response = await _withRetry(
+        () => _api.submitJob(
+          settings: _settings,
+          imageBytes: imageBytes,
+          pipeline: effectivePipeline,
+          title: title,
+          chapter: chapter,
+          pageNumber: pageNumber,
+          sourceUrl: sourceUrl,
+          sourceSite: sourceSite,
+          latestGroup: latestGroup,
+          latestToken: latestToken,
+          latestSeq: latestSeq,
+          priority: priority,
+          targetLanguage: targetLanguage,
+        ),
+      );
 
       final jobId = response['job_id'] as String;
       final isCached = response['cached'] == true;
@@ -176,10 +189,9 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
           state = {...state};
 
           try {
-            final img = await _withRetry(() => _api.getJobImage(
-              settings: _settings,
-              imageUrl: imageUrl,
-            ));
+            final img = await _withRetry(
+              () => _api.getJobImage(settings: _settings, imageUrl: imageUrl),
+            );
             job.translatedImage = img;
             job.status = PageJobStatus.completed;
             job.cached = true;
@@ -197,23 +209,31 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
               pageNumber: pageNumber,
             );
           } catch (e) {
-            debugPrint('[Jobs] Cache download failed for $pageId, resubmitting: $e');
+            debugPrint(
+              '[Jobs] Cache download failed for $pageId, resubmitting: $e',
+            );
           }
         }
         if (!cacheDownloaded) {
           // Cache download failed or no URL — resubmit bypassing server cache
-          final response2 = await _withRetry(() => _api.submitJob(
-            settings: _settings,
-            imageBytes: imageBytes,
-            pipeline: effectivePipeline,
-            title: title,
-            chapter: chapter,
-            pageNumber: pageNumber,
-            sourceUrl: sourceUrl,
-            priority: priority,
-            targetLanguage: targetLanguage,
-            force: true,
-          ));
+          final response2 = await _withRetry(
+            () => _api.submitJob(
+              settings: _settings,
+              imageBytes: imageBytes,
+              pipeline: effectivePipeline,
+              title: title,
+              chapter: chapter,
+              pageNumber: pageNumber,
+              sourceUrl: sourceUrl,
+              sourceSite: sourceSite,
+              latestGroup: latestGroup,
+              latestToken: latestToken,
+              latestSeq: latestSeq,
+              priority: priority,
+              targetLanguage: targetLanguage,
+              force: true,
+            ),
+          );
           final jobId2 = response2['job_id'] as String;
           debugPrint('[Jobs] $pageId resubmitted → jobId=$jobId2');
           job.jobId = jobId2;
@@ -242,7 +262,9 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
   void _handleWsMessage(Map<String, dynamic> msg) {
     final type = msg['type'] as String?;
     final jobId = msg['job_id'] as String?;
-    if (type == 'job_complete') debugPrint('[Jobs] WS complete jobId=$jobId status=${msg['status']}');
+    if (type == 'job_complete') {
+      debugPrint('[Jobs] WS complete jobId=$jobId status=${msg['status']}');
+    }
     if (type == null || jobId == null) return;
 
     // Find the PageJob with this jobId
@@ -285,10 +307,9 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
     }
 
     try {
-      final img = await _withRetry(() => _api.getJobImage(
-        settings: _settings,
-        imageUrl: job.imageUrl!,
-      ));
+      final img = await _withRetry(
+        () => _api.getJobImage(settings: _settings, imageUrl: job.imageUrl!),
+      );
       job.translatedImage = img;
       job.status = PageJobStatus.completed;
       state = {...state};
@@ -298,7 +319,9 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
         final hash = await _cache.hashImage(job.originalImage!);
         final effectivePipeline = job.pipeline ?? _settings.pipeline;
         final lang = _settings.targetLanguage;
-        final cp = lang == 'en' ? effectivePipeline : '${effectivePipeline}_$lang';
+        final cp = lang == 'en'
+            ? effectivePipeline
+            : '${effectivePipeline}_$lang';
         await _cache.store(
           hash: hash,
           pipeline: cp,
@@ -327,7 +350,9 @@ class JobsNotifier extends StateNotifier<Map<String, PageJob>> {
       final activeJobs = state.values
           .where((j) => j.isActive && j.jobId != null)
           .toList();
-      debugPrint('[Jobs] poll tick active=${activeJobs.length} WS=${_ws.isConnected}');
+      debugPrint(
+        '[Jobs] poll tick active=${activeJobs.length} WS=${_ws.isConnected}',
+      );
       if (activeJobs.isEmpty) {
         _pollTimer?.cancel();
         _pollTimer = null;

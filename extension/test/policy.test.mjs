@@ -51,6 +51,29 @@ test('sanitizeMetadata clamps strings and normalizes source URL', () => {
   assert.equal(meta.source_url, '');
 });
 
+test('sanitizeMetadata passes Kindle latest-page priority markers only for Kindle', () => {
+  const kindle = sanitizeMetadata({
+    sourceSite: 'kindle',
+    latestGroup: 'kindle:B000000001:session-a',
+    latestToken: 'kindle-session-a-2-spread',
+    latestSeq: 2,
+  }, 'https://read.amazon.co.jp/books/B000000001');
+  assert.equal(kindle.source_site, 'kindle');
+  assert.equal(kindle.latest_group, 'kindle:B000000001:session-a');
+  assert.equal(kindle.latest_token, 'kindle-session-a-2-spread');
+  assert.equal(kindle.latest_seq, '2');
+
+  const webtoon = sanitizeMetadata({
+    sourceSite: 'webtoon',
+    latestGroup: 'webtoon:episode',
+    latestToken: 'wt-1',
+  }, 'https://comic.naver.com/webtoon/detail');
+  assert.equal(webtoon.source_site, '');
+  assert.equal(webtoon.latest_group, '');
+  assert.equal(webtoon.latest_token, '');
+  assert.equal(webtoon.latest_seq, '');
+});
+
 test('sanitizeCapture keeps safe fields and numeric rect values', () => {
   const capture = sanitizeCapture({
     imgSrc: 'blob:https://read.amazon.co.jp/123',

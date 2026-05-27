@@ -10,6 +10,7 @@
   const REPAINT_GEOMETRY_TOLERANCE = 0.02;
   const REPAINT_SUPPRESS_MS = 600;
   const QUEUED_DETECTION_DELAY_MS = 250;
+  const SUBMIT_DEBOUNCE_MS = 550;
   const REAPPLY_DELAYS_MS = [800, 1800, 3500];
   const MIN_PAGE_SIDE_PX = 100;
   const MIN_VISIBLE_OVERLAP_PX2 = 2000;
@@ -27,6 +28,7 @@
   let navIntent = 'forward';
   let activeGroups = 0;
   let queuedDetection = null;
+  let submitDebounceTimer = null;
   let lastNoTargetReportAt = 0;
   const processedBlobs = new Set();
   const spreadGroups = new Map();
@@ -123,19 +125,34 @@
   }
 
   function scheduleSubmit(detection) {
-    if (activeGroups > 0) {
-      queuedDetection = detection;
-      return;
+    queuedDetection = detection;
+    if (activeGroups > 0) return;
+    scheduleQueuedFlush(SUBMIT_DEBOUNCE_MS);
+  }
+
+  function scheduleQueuedFlush(delayMs) {
+    if (submitDebounceTimer) window.clearTimeout(submitDebounceTimer);
+    submitDebounceTimer = window.setTimeout(flushQueuedDetection, delayMs);
+  }
+
+  function scheduleQueuedFlushAfterActive() {
+    if (activeGroups === 0 && queuedDetection) {
+      scheduleQueuedFlush(QUEUED_DETECTION_DELAY_MS);
     }
+  }
+
+  function flushQueuedDetection() {
+    submitDebounceTimer = null;
+    if (activeGroups > 0 || !queuedDetection) return;
+    const detection = queuedDetection;
     activeGroups += 1;
     queuedDetection = null;
     submitDetection(detection).finally(() => {
-      if (!spreadGroups.has(detection.pageId)) activeGroups = Math.max(0, activeGroups - 1);
-      if (activeGroups === 0 && queuedDetection) {
-        const next = queuedDetection;
-        queuedDetection = null;
-        window.setTimeout(() => scheduleSubmit(next), QUEUED_DETECTION_DELAY_MS);
-      }
+      // Release submission gating once capture + server enqueue are done. Spread
+      // completion is tracked separately for stitching and must not block newer
+      // page detections from updating the server-side latest marker.
+      activeGroups = Math.max(0, activeGroups - 1);
+      scheduleQueuedFlushAfterActive();
     });
   }
 
@@ -255,11 +272,7 @@
 
   function finishGroup() {
     activeGroups = Math.max(0, activeGroups - 1);
-    if (activeGroups === 0 && queuedDetection) {
-      const next = queuedDetection;
-      queuedDetection = null;
-      window.setTimeout(() => scheduleSubmit(next), QUEUED_DETECTION_DELAY_MS);
-    }
+    scheduleQueuedFlushAfterActive();
   }
 
   function captureImage(target, part) {
@@ -386,11 +399,17 @@
 
   function parseKindleMetadata(capture, pageId) {
     const asinMatch = /[/=](B[A-Z0-9]{9})/.exec(location.href);
+    const title = asinMatch?.[1] || 'kindle';
+    const latestToken = capture.groupId || capture.pageId || pageId;
     return {
-      title: asinMatch?.[1] || 'kindle',
+      title,
       chapter: '1',
       pageNumber: capture.kindlePage || String(capture.index || pageId),
       sourceUrl: location.href,
+      sourceSite: 'kindle',
+      latestGroup: `kindle:${title}:${sessionId}`,
+      latestToken,
+      latestSeq: capture.index,
     };
   }
 

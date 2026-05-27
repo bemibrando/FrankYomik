@@ -59,11 +59,17 @@ export function validateAllowedWebtoonImageUrl(value) {
 }
 
 export function sanitizeMetadata(metadata = {}, fallbackUrl = '') {
+  const sourceSite = safeText(metadata.sourceSite || metadata.source_site, 40).toLowerCase();
+  const isKindle = sourceSite === 'kindle';
   return {
     title: safeText(metadata.title, 120),
     chapter: safeText(metadata.chapter, 60),
     page_number: safeText(metadata.pageNumber || metadata.page_number, 60),
     source_url: safeUrl(metadata.sourceUrl || metadata.source_url || fallbackUrl),
+    source_site: isKindle ? 'kindle' : '',
+    latest_group: isKindle ? safeText(metadata.latestGroup || metadata.latest_group, 160) : '',
+    latest_token: isKindle ? safeText(metadata.latestToken || metadata.latest_token, 160) : '',
+    latest_seq: isKindle ? safePositiveInteger(metadata.latestSeq || metadata.latest_seq) : '',
   };
 }
 
@@ -105,6 +111,12 @@ export function safeUrl(value) {
 export function finiteNumber(value) {
   const number = Number(value);
   return Number.isFinite(number) ? number : undefined;
+}
+
+export function safePositiveInteger(value) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) return '';
+  return String(number);
 }
 
 export function formatBytes(bytes) {

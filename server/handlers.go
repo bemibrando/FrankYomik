@@ -115,6 +115,10 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		Chapter:        r.FormValue("chapter"),
 		PageNumber:     r.FormValue("page_number"),
 		SourceURL:      r.FormValue("source_url"),
+		SourceSite:     r.FormValue("source_site"),
+		LatestGroup:    r.FormValue("latest_group"),
+		LatestToken:    r.FormValue("latest_token"),
+		LatestSeq:      r.FormValue("latest_seq"),
 		ForceReprocess: forceReprocess,
 		TargetLang:     targetLang,
 	}
@@ -152,6 +156,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 	if !forceReprocess {
 		if _, m, ok := s.cache.LookupBySourceHash(cachePipeline, sourceHash); ok {
+			s.queue.updateLatestMarker(r.Context(), priority, meta)
 			// Keep by-ref link warm when metadata is provided.
 			if meta.Title != "" && meta.Chapter != "" && meta.PageNumber != "" {
 				_ = s.cache.LinkRef(cachePipeline, meta.Title, meta.Chapter, meta.PageNumber, sourceHash)

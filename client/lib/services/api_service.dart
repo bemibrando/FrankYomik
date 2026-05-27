@@ -25,6 +25,10 @@ class ApiService {
     String? chapter,
     String? pageNumber,
     String? sourceUrl,
+    String? sourceSite,
+    String? latestGroup,
+    String? latestToken,
+    int? latestSeq,
     String priority = 'high',
     String? targetLanguage,
     bool force = false,
@@ -43,14 +47,19 @@ class ApiService {
     if (chapter != null) request.fields['chapter'] = chapter;
     if (pageNumber != null) request.fields['page_number'] = pageNumber;
     if (sourceUrl != null) request.fields['source_url'] = sourceUrl;
+    if (sourceSite != null) request.fields['source_site'] = sourceSite;
+    if (latestGroup != null) request.fields['latest_group'] = latestGroup;
+    if (latestToken != null) request.fields['latest_token'] = latestToken;
+    if (latestSeq != null && latestSeq > 0) {
+      request.fields['latest_seq'] = latestSeq.toString();
+    }
     if (force) request.fields['force'] = 'true';
 
     final result = await (() async {
       final response = await _client.send(request);
       final body = await response.stream.bytesToString();
       return (response.statusCode, body);
-    })()
-        .timeout(const Duration(seconds: 30));
+    })().timeout(const Duration(seconds: 30));
 
     if (result.$1 != 201) {
       throw ApiException(
@@ -68,9 +77,9 @@ class ApiService {
     required String jobId,
   }) async {
     final uri = Uri.parse('${settings.serverUrl}/api/v1/jobs/$jobId');
-    final response = await _client.get(uri, headers: _headers(settings)).timeout(
-      const Duration(seconds: 10),
-    );
+    final response = await _client
+        .get(uri, headers: _headers(settings))
+        .timeout(const Duration(seconds: 10));
 
     if (response.statusCode != 200) {
       throw ApiException(
@@ -91,9 +100,9 @@ class ApiService {
     final uri = imageUrl.startsWith('http')
         ? Uri.parse(imageUrl)
         : Uri.parse('${settings.serverUrl}$imageUrl');
-    final response = await _client.get(uri, headers: _headers(settings)).timeout(
-      const Duration(seconds: 45),
-    );
+    final response = await _client
+        .get(uri, headers: _headers(settings))
+        .timeout(const Duration(seconds: 45));
 
     if (response.statusCode != 200) {
       throw ApiException(
@@ -109,9 +118,9 @@ class ApiService {
   Future<Map<String, dynamic>> getHealth(ServerSettings settings) async {
     final uri = Uri.parse('${settings.serverUrl}/api/v1/health');
     debugPrint('[API] getHealth: $uri');
-    final response = await _client.get(uri).timeout(
-      const Duration(seconds: 10),
-    );
+    final response = await _client
+        .get(uri)
+        .timeout(const Duration(seconds: 10));
 
     debugPrint('[API] getHealth response: ${response.statusCode}');
     if (response.statusCode != 200) {

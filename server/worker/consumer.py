@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 STREAM_HIGH = "frank:jobs:high"
 STREAM_LOW = "frank:jobs:low"
 IMAGE_KEY_PREFIX = "frank:images:"
+LATEST_KEY_PREFIX = "frank:latest:"
 RESULT_KEY_PREFIX = "frank:results:"
 RESULT_IMG_PREFIX = "frank:results:img:"
 NOTIFY_PREFIX = "frank:notify:"
@@ -157,10 +158,10 @@ class Consumer:
 
         if msg is not None:
             stream, msg_id, fields = msg
-            self._process_message(stream, msg_id, fields)
-            if stream == STREAM_HIGH:
+            outcome = self._process_message(stream, msg_id, fields)
+            if stream == STREAM_HIGH and outcome == "processed":
                 self._high_streak += 1
-            else:
+            elif stream == STREAM_LOW:
                 self._high_streak = 0
 
         # Periodic heartbeat and pending entry reclaim
@@ -227,7 +228,7 @@ class Consumer:
                 msg_id, fields)
 
     def _process_message(self, stream: str, msg_id: bytes,
-                         fields: dict) -> None:
+                         fields: dict) -> str:
         """Process a single job message from the stream."""
         job_id = self._decode_field(fields, b"job_id")
         pipeline = self._decode_field(fields, b"pipeline")
@@ -244,7 +245,10 @@ class Consumer:
         if not job_id or not pipeline:
             log.warning("Malformed message %s: missing job_id or pipeline", msg_id)
             self._rdb.xack(stream, self.consumer_group, msg_id)
-            return
+            return "skipped"
+
+        if self._defer_stale_interactive_job(stream, msg_id, fields, job_id):
+            return "deferred"
 
         log.info("Processing job %s (pipeline=%s, stream=%s)",
                  job_id, pipeline, stream)
@@ -263,7 +267,7 @@ class Consumer:
                 error=f"Image not found: {image_key}",
             ))
             self._rdb.xack(stream, self.consumer_group, msg_id)
-            return
+            return "skipped"
         if not source_hash:
             source_hash = hashlib.sha256(image_bytes).hexdigest()
 
@@ -292,7 +296,7 @@ class Consumer:
                     source_hash=source_hash,
                 ))
                 self._rdb.xack(stream, self.consumer_group, msg_id)
-                return
+                return "skipped"
 
         # Process
         job = ProcessingJob(
@@ -346,6 +350,55 @@ class Consumer:
         log.info("Job %s completed: status=%s, bubbles=%d, time=%dms",
                  job_id, result.status, result.bubble_count,
                  result.processing_time_ms)
+        return "processed"
+
+    def _defer_stale_interactive_job(self, stream: str, msg_id: bytes,
+                                     fields: dict, job_id: str) -> bool:
+        """Move stale Kindle high-priority jobs to low before expensive work.
+
+        Redis Streams are FIFO within each stream. A rapid Kindle page flip can
+        enqueue many high-priority pages before the page where the reader stops.
+        The server records the latest visible page token per Kindle session;
+        high-stream entries with an older token are requeued to the low stream
+        so the current page can be processed first while older pages still catch
+        up eventually.
+        """
+        if stream != STREAM_HIGH:
+            return False
+        if self._decode_field(fields, b"source_site") != "kindle":
+            return False
+
+        latest_token = self._decode_field(fields, b"latest_token")
+        latest_key = self._decode_field(fields, b"latest_key")
+        latest_group = self._decode_field(fields, b"latest_group")
+        if not latest_token:
+            return False
+        if not latest_key and latest_group:
+            latest_key = f"{LATEST_KEY_PREFIX}{hashlib.sha256(latest_group.encode()).hexdigest()}"
+        if not latest_key:
+            return False
+
+        current_token = self._rdb.get(latest_key)
+        if current_token is None:
+            return False
+        if isinstance(current_token, bytes):
+            current_token = current_token.decode(errors="replace")
+        else:
+            current_token = str(current_token)
+        if "\n" in current_token:
+            current_token = current_token.split("\n", 1)[1]
+        if current_token == latest_token:
+            return False
+
+        deferred_fields = dict(fields)
+        deferred_fields[b"deferred_from_high"] = b"1"
+        self._rdb.xadd(STREAM_LOW, deferred_fields)
+        self._rdb.xack(stream, self.consumer_group, msg_id)
+        log.info(
+            "Deferred stale Kindle job %s from high to low (token=%s latest=%s)",
+            job_id, latest_token, current_token,
+        )
+        return True
 
     def _store_result(self, result: ProcessingResult) -> None:
         """Store result metadata and image bytes in Redis."""

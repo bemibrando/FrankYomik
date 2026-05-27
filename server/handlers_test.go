@@ -63,13 +63,22 @@ func makePNGBytes() []byte {
 
 func makeJobRequest(t *testing.T, pipeline, priority string, imgBytes []byte) (*http.Request, *httptest.ResponseRecorder) {
 	t.Helper()
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
+	fields := map[string]string{}
 	if pipeline != "" {
-		writer.WriteField("pipeline", pipeline)
+		fields["pipeline"] = pipeline
 	}
 	if priority != "" {
-		writer.WriteField("priority", priority)
+		fields["priority"] = priority
+	}
+	return makeJobRequestWithFields(t, fields, imgBytes)
+}
+
+func makeJobRequestWithFields(t *testing.T, fields map[string]string, imgBytes []byte) (*http.Request, *httptest.ResponseRecorder) {
+	t.Helper()
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	for key, value := range fields {
+		writer.WriteField(key, value)
 	}
 	if imgBytes != nil {
 		part, _ := writer.CreateFormFile("image", "test.png")
@@ -390,6 +399,215 @@ func TestCreateJobSuccess(t *testing.T) {
 			t.Errorf("got %d, want 201", w.Code)
 		}
 	})
+}
+
+func TestCreateJobKindleLatestMarker(t *testing.T) {
+	srv, rdb := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+	ctx := context.Background()
+
+	fields := map[string]string{
+		"pipeline":     "manga_translate",
+		"priority":     "high",
+		"source_site":  "kindle",
+		"latest_group": "kindle:B000000001:session-a",
+		"latest_token": "kindle-session-a-1",
+		"latest_seq":   "1",
+	}
+	req, w := makeJobRequestWithFields(t, fields, append(makePNGBytes(), byte(1)))
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		body, _ := io.ReadAll(w.Body)
+		t.Fatalf("got %d, want 201: %s", w.Code, string(body))
+	}
+
+	msgs, err := rdb.XRange(ctx, streamHigh, "-", "+").Result()
+	if err != nil {
+		t.Fatalf("xrange: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d stream messages, want 1", len(msgs))
+	}
+	values := msgs[0].Values
+	if values["source_site"] != "kindle" {
+		t.Fatalf("source_site = %v, want kindle", values["source_site"])
+	}
+	if values["latest_group"] != fields["latest_group"] {
+		t.Fatalf("latest_group = %v, want %s", values["latest_group"], fields["latest_group"])
+	}
+	if values["latest_token"] != fields["latest_token"] {
+		t.Fatalf("latest_token = %v, want %s", values["latest_token"], fields["latest_token"])
+	}
+	if values["latest_seq"] != fields["latest_seq"] {
+		t.Fatalf("latest_seq = %v, want %s", values["latest_seq"], fields["latest_seq"])
+	}
+	latestKey, ok := values["latest_key"].(string)
+	if !ok || latestKey == "" {
+		t.Fatalf("latest_key missing from stream values: %#v", values["latest_key"])
+	}
+	if latestKey != latestKeyForGroup(fields["latest_group"]) {
+		t.Fatalf("latest_key = %s, want %s", latestKey, latestKeyForGroup(fields["latest_group"]))
+	}
+	stored, err := rdb.Get(ctx, latestKey).Result()
+	if err != nil {
+		t.Fatalf("get latest key: %v", err)
+	}
+	if latestTokenFromStoredValue(stored) != fields["latest_token"] {
+		t.Fatalf("latest marker = %s, want %s", stored, fields["latest_token"])
+	}
+
+	fields["latest_token"] = "kindle-session-a-2"
+	fields["latest_seq"] = "2"
+	req2, w2 := makeJobRequestWithFields(t, fields, append(makePNGBytes(), byte(2)))
+	mux.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusCreated {
+		body, _ := io.ReadAll(w2.Body)
+		t.Fatalf("second got %d, want 201: %s", w2.Code, string(body))
+	}
+	stored, err = rdb.Get(ctx, latestKey).Result()
+	if err != nil {
+		t.Fatalf("get latest key after second submit: %v", err)
+	}
+	if latestTokenFromStoredValue(stored) != fields["latest_token"] {
+		t.Fatalf("latest marker after second submit = %s, want %s", stored, fields["latest_token"])
+	}
+
+	fields["latest_token"] = "kindle-session-a-older"
+	fields["latest_seq"] = "1"
+	req3, w3 := makeJobRequestWithFields(t, fields, append(makePNGBytes(), byte(3)))
+	mux.ServeHTTP(w3, req3)
+	if w3.Code != http.StatusCreated {
+		body, _ := io.ReadAll(w3.Body)
+		t.Fatalf("third got %d, want 201: %s", w3.Code, string(body))
+	}
+	stored, err = rdb.Get(ctx, latestKey).Result()
+	if err != nil {
+		t.Fatalf("get latest key after older submit: %v", err)
+	}
+	if latestTokenFromStoredValue(stored) != "kindle-session-a-2" {
+		t.Fatalf("older seq regressed latest marker to %q", stored)
+	}
+}
+
+func TestCreateJobKindleLatestMarkerBypassesDedup(t *testing.T) {
+	srv, rdb := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+	ctx := context.Background()
+	img := append(makePNGBytes(), byte(9))
+
+	fields := map[string]string{
+		"pipeline":     "manga_translate",
+		"priority":     "high",
+		"source_site":  "kindle",
+		"latest_group": "kindle:B000000001:session-a",
+		"latest_token": "kindle-session-a-1",
+		"latest_seq":   "1",
+	}
+	req1, w1 := makeJobRequestWithFields(t, fields, img)
+	mux.ServeHTTP(w1, req1)
+	if w1.Code != http.StatusCreated {
+		body, _ := io.ReadAll(w1.Body)
+		t.Fatalf("first got %d, want 201: %s", w1.Code, string(body))
+	}
+	var resp1 JobResponse
+	if err := json.NewDecoder(w1.Body).Decode(&resp1); err != nil {
+		t.Fatalf("decode first response: %v", err)
+	}
+	if resp1.DedupHit {
+		t.Fatal("first latest submission should not be a dedup hit")
+	}
+
+	// Job IDs include a millisecond timestamp. Make the duplicate submit happen in
+	// a later tick so this regression test checks dedup behavior, not clock
+	// granularity.
+	time.Sleep(2 * time.Millisecond)
+
+	fields["latest_token"] = "kindle-session-a-2"
+	fields["latest_seq"] = "2"
+	req2, w2 := makeJobRequestWithFields(t, fields, img)
+	mux.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusCreated {
+		body, _ := io.ReadAll(w2.Body)
+		t.Fatalf("second got %d, want 201: %s", w2.Code, string(body))
+	}
+	var resp2 JobResponse
+	if err := json.NewDecoder(w2.Body).Decode(&resp2); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+	if resp2.DedupHit {
+		t.Fatal("duplicate Kindle latest submission should bypass dedup")
+	}
+	if resp2.JobID == resp1.JobID {
+		t.Fatalf("duplicate Kindle latest submission reused job_id %s", resp2.JobID)
+	}
+
+	msgs, err := rdb.XRange(ctx, streamHigh, "-", "+").Result()
+	if err != nil {
+		t.Fatalf("xrange: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("got %d stream messages, want 2", len(msgs))
+	}
+	if msgs[0].Values["latest_token"] != "kindle-session-a-1" {
+		t.Fatalf("first stream latest_token = %v", msgs[0].Values["latest_token"])
+	}
+	if msgs[1].Values["latest_token"] != "kindle-session-a-2" {
+		t.Fatalf("second stream latest_token = %v", msgs[1].Values["latest_token"])
+	}
+
+	latestKey := latestKeyForGroup(fields["latest_group"])
+	stored, err := rdb.Get(ctx, latestKey).Result()
+	if err != nil {
+		t.Fatalf("get latest key: %v", err)
+	}
+	if latestTokenFromStoredValue(stored) != "kindle-session-a-2" {
+		t.Fatalf("latest marker = %s, want kindle-session-a-2", stored)
+	}
+}
+
+func latestTokenFromStoredValue(value string) string {
+	parts := strings.SplitN(value, "\n", 2)
+	if len(parts) == 2 {
+		return parts[1]
+	}
+	return value
+}
+
+func TestCreateJobWebtoonDoesNotWriteLatestMarker(t *testing.T) {
+	srv, rdb := newTestServer(t)
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+	ctx := context.Background()
+
+	fields := map[string]string{
+		"pipeline":     "webtoon",
+		"priority":     "high",
+		"source_site":  "webtoon",
+		"latest_group": "webtoon:episode",
+		"latest_token": "wt-1",
+	}
+	req, w := makeJobRequestWithFields(t, fields, makePNGBytes())
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		body, _ := io.ReadAll(w.Body)
+		t.Fatalf("got %d, want 201: %s", w.Code, string(body))
+	}
+
+	msgs, err := rdb.XRange(ctx, streamHigh, "-", "+").Result()
+	if err != nil {
+		t.Fatalf("xrange: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("got %d stream messages, want 1", len(msgs))
+	}
+	if _, exists := msgs[0].Values["latest_key"]; exists {
+		t.Fatalf("webtoon job should not contain latest_key: %#v", msgs[0].Values)
+	}
+	if exists, err := rdb.Exists(ctx, latestKeyForGroup(fields["latest_group"])).Result(); err != nil || exists != 0 {
+		t.Fatalf("webtoon latest marker exists=%d err=%v, want none", exists, err)
+	}
 }
 
 func TestCreateJobDedup(t *testing.T) {

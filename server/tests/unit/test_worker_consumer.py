@@ -16,6 +16,7 @@ from worker.consumer import (
     DEFAULT_RESULT_TTL,
     DEFAULT_HEARTBEAT_TTL,
     STREAM_HIGH,
+    LATEST_KEY_PREFIX,
     STREAM_LOW,
 )
 
@@ -318,6 +319,130 @@ class TestProcessMessage:
         c._rdb.xack.assert_called_once_with(STREAM_HIGH, "workers", b"3-0")
         # Verify notification published
         c._rdb.publish.assert_called_once()
+
+
+class TestLatestPriorityDemotion:
+    def test_stale_kindle_high_job_is_deferred_to_low(self):
+        c = _make_consumer()
+        latest_key = f"{LATEST_KEY_PREFIX}abc"
+        c._rdb.get.return_value = b"page-2"
+
+        fields = {
+            b"job_id": b"j-old",
+            b"pipeline": b"manga_translate",
+            b"image_key": b"frank:images:old",
+            b"source_site": b"kindle",
+            b"latest_key": latest_key.encode(),
+            b"latest_token": b"page-1",
+        }
+        outcome = c._process_message(STREAM_HIGH, b"10-0", fields)
+
+        assert outcome == "deferred"
+        c._rdb.get.assert_called_once_with(latest_key)
+        c._rdb.xadd.assert_called_once()
+        assert c._rdb.xadd.call_args[0][0] == STREAM_LOW
+        deferred = c._rdb.xadd.call_args[0][1]
+        assert deferred[b"job_id"] == b"j-old"
+        assert deferred[b"deferred_from_high"] == b"1"
+        c._rdb.xack.assert_called_once_with(STREAM_HIGH, "workers", b"10-0")
+
+    @patch("worker.consumer.process_job")
+    def test_current_kindle_high_job_processes_normally(self, mock_process):
+        c = _make_consumer()
+        latest_key = f"{LATEST_KEY_PREFIX}abc"
+        c._rdb.get.side_effect = [b"7\npage-1", b"fake-png"]
+        mock_process.return_value = ProcessingResult(
+            job_id="j-current", status="completed", image_bytes=b"result",
+        )
+
+        fields = {
+            b"job_id": b"j-current",
+            b"pipeline": b"manga_translate",
+            b"image_key": b"frank:images:current",
+            b"source_site": b"kindle",
+            b"latest_key": latest_key.encode(),
+            b"latest_token": b"page-1",
+        }
+        outcome = c._process_message(STREAM_HIGH, b"11-0", fields)
+
+        assert outcome == "processed"
+        mock_process.assert_called_once()
+        c._rdb.xadd.assert_not_called()
+        c._rdb.xack.assert_called_once_with(STREAM_HIGH, "workers", b"11-0")
+
+    @patch("worker.consumer.process_job")
+    def test_missing_latest_marker_processes_normally(self, mock_process):
+        c = _make_consumer()
+        c._rdb.get.side_effect = [None, b"fake-png"]
+        mock_process.return_value = ProcessingResult(
+            job_id="j-missing", status="completed", image_bytes=b"result",
+        )
+
+        fields = {
+            b"job_id": b"j-missing",
+            b"pipeline": b"manga_translate",
+            b"image_key": b"frank:images:missing",
+            b"source_site": b"kindle",
+            b"latest_key": f"{LATEST_KEY_PREFIX}missing".encode(),
+            b"latest_token": b"page-1",
+        }
+        outcome = c._process_message(STREAM_HIGH, b"12-0", fields)
+
+        assert outcome == "processed"
+        mock_process.assert_called_once()
+        c._rdb.xadd.assert_not_called()
+
+    @patch("worker.consumer.process_job")
+    def test_low_stream_stale_kindle_job_processes_normally(self, mock_process):
+        c = _make_consumer()
+        c._rdb.get.return_value = b"fake-png"
+        mock_process.return_value = ProcessingResult(
+            job_id="j-low", status="completed", image_bytes=b"result",
+        )
+
+        fields = {
+            b"job_id": b"j-low",
+            b"pipeline": b"manga_translate",
+            b"image_key": b"frank:images:low",
+            b"source_site": b"kindle",
+            b"latest_key": f"{LATEST_KEY_PREFIX}low".encode(),
+            b"latest_token": b"page-1",
+        }
+        outcome = c._process_message(STREAM_LOW, b"13-0", fields)
+
+        assert outcome == "processed"
+        mock_process.assert_called_once()
+        c._rdb.xadd.assert_not_called()
+
+    def test_failed_low_requeue_does_not_ack_high_message(self):
+        c = _make_consumer()
+        c._rdb.get.return_value = b"page-2"
+        c._rdb.xadd.side_effect = RuntimeError("redis down")
+        fields = {
+            b"job_id": b"j-old",
+            b"pipeline": b"manga_translate",
+            b"image_key": b"frank:images:old",
+            b"source_site": b"kindle",
+            b"latest_key": f"{LATEST_KEY_PREFIX}abc".encode(),
+            b"latest_token": b"page-1",
+        }
+
+        import pytest
+        with pytest.raises(RuntimeError, match="redis down"):
+            c._process_message(STREAM_HIGH, b"14-0", fields)
+        c._rdb.xack.assert_not_called()
+
+    def test_deferred_high_job_does_not_increment_high_burst(self):
+        c = _make_consumer()
+        c._read_one = MagicMock(return_value=(
+            STREAM_HIGH, b"15-0", {b"job_id": b"j", b"pipeline": b"manga_translate"},
+        ))
+        c._process_message = MagicMock(return_value="deferred")
+        c._last_heartbeat = time.monotonic()
+
+        c._tick()
+
+        assert c._high_streak == 0
 
 
 # --- _store_result ---
