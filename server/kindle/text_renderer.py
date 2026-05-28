@@ -32,6 +32,8 @@ _BRIGHT_REGION_MAX_HEIGHT_RATIO = 2.0
 _BRIGHT_REGION_MAX_WIDTH_EXTRA = 120
 _BRIGHT_REGION_MAX_HEIGHT_EXTRA = 120
 _BRIGHT_REGION_MIN_AREA_GAIN = 1.15
+_BRIGHT_REGION_MAX_BORDER_HOLE_RATIO = 0.015
+_BRIGHT_REGION_MAX_BORDER_HOLE_PIXELS = 24
 
 log = logging.getLogger(__name__)
 
@@ -542,8 +544,6 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
     """
     if mask is not None:
         bbox = _mask_safe_bbox(bbox, mask, vertical=True)
-    else:
-        bbox = _expand_bright_region_bbox(img, bbox)
 
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
@@ -573,6 +573,19 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
 
     if not chars:
         return
+
+    if mask is None:
+        initial_font_size = _fit_vertical_font_size(chars, bw, bh)
+        bbox = _expand_bright_region_bbox(
+            img,
+            bbox,
+            min_extra_row_height=_vertical_main_char_height(initial_font_size),
+        )
+        x1, y1, x2, y2 = bbox
+        bw = x2 - x1 - 2 * TEXT_MARGIN
+        bh = y2 - y1 - 2 * TEXT_MARGIN
+        if bw < 10 or bh < 10:
+            return
 
     font_size = _fit_vertical_font_size(chars, bw, bh)
     furi_size = _furigana_font_size(font_size)
@@ -769,7 +782,8 @@ def _fit_furigana_stack(target_size: int, total_height: int,
 
 
 def _expand_bright_region_bbox(img: Image.Image,
-                               bbox: tuple[int, int, int, int]
+                               bbox: tuple[int, int, int, int],
+                               min_extra_row_height: int | None = None,
                                ) -> tuple[int, int, int, int]:
     """Expand no-mask furigana boxes into nearby white caption space.
 
@@ -842,9 +856,85 @@ def _expand_bright_region_bbox(img: Image.Image,
     ex1, ex2 = _cap_interval(ex1, ex2, x1, x2, max_w, sx1, sx2)
     ey1, ey2 = _cap_interval(ey1, ey2, y1, y2, max_h, sy1, sy2)
 
+    component_mask = labels == label
+    if not _has_clear_bright_expansion_space(
+        component_mask,
+        search_origin=(sx1, sy1),
+        original_bbox=(x1, y1, x2, y2),
+        expanded_bbox=(ex1, ey1, ex2, ey2),
+        min_extra_row_height=min_extra_row_height,
+    ):
+        return bbox
+
     if (ex2 - ex1) * (ey2 - ey1) < bw * bh * _BRIGHT_REGION_MIN_AREA_GAIN:
         return bbox
     return (ex1, ey1, ex2, ey2)
+
+
+def _has_clear_bright_expansion_space(
+    component_mask: np.ndarray,
+    *,
+    search_origin: tuple[int, int],
+    original_bbox: tuple[int, int, int, int],
+    expanded_bbox: tuple[int, int, int, int],
+    min_extra_row_height: int | None,
+) -> bool:
+    """Return true only when expansion border is genuinely blank space.
+
+    Normal speech balloons can be one large connected white component with
+    multiple text columns inside.  Expanding one tight no-mask detection to that
+    whole component makes the new text/furigana overwhelm the balloon.  Keep the
+    expansion only when the added top/bottom border is at least one extra text
+    row and the added area is mostly clean white space, not other glyph holes.
+    """
+    import cv2
+
+    sx1, sy1 = search_origin
+    ox1, oy1, ox2, oy2 = original_bbox
+    ex1, ey1, ex2, ey2 = expanded_bbox
+    if ex2 <= ex1 or ey2 <= ey1:
+        return False
+
+    lx1, ly1 = ex1 - sx1, ey1 - sy1
+    lx2, ly2 = ex2 - sx1, ey2 - sy1
+    region = component_mask[ly1:ly2, lx1:lx2]
+    if region.size == 0:
+        return False
+
+    orig = np.zeros(region.shape, dtype=bool)
+    rx1 = max(0, ox1 - ex1)
+    ry1 = max(0, oy1 - ey1)
+    rx2 = min(region.shape[1], ox2 - ex1)
+    ry2 = min(region.shape[0], oy2 - ey1)
+    if rx2 <= rx1 or ry2 <= ry1:
+        return False
+    orig[ry1:ry2, rx1:rx2] = True
+
+    extra_white_pixels = int(np.count_nonzero(region & ~orig))
+    if min_extra_row_height is not None:
+        row_height = max(1, int(min_extra_row_height))
+        vertical_extra = max(0, oy1 - ey1) + max(0, ey2 - oy2)
+        if vertical_extra < row_height:
+            return False
+        required_area = max(1, (ox2 - ox1) * row_height)
+        if extra_white_pixels < required_area:
+            return False
+
+    # Fill only holes enclosed by the bright component.  Dark artwork outside a
+    # rounded caption/glow is external background and should not count against
+    # it; dark glyphs from neighboring text columns inside a speech balloon do.
+    background = (~region).astype(np.uint8)
+    padded = np.pad(background, 1, constant_values=1)
+    flood = padded.copy()
+    cv2.floodFill(flood, None, (0, 0), 2)
+    external_background = flood[1:-1, 1:-1] == 2
+    holes = (~region) & ~external_background
+    border_holes = int(np.count_nonzero(holes & ~orig))
+    hole_limit = max(
+        _BRIGHT_REGION_MAX_BORDER_HOLE_PIXELS,
+        int(extra_white_pixels * _BRIGHT_REGION_MAX_BORDER_HOLE_RATIO),
+    )
+    return border_holes <= hole_limit
 
 
 def _clamp_bbox(bbox: tuple[int, int, int, int], img_w: int, img_h: int

@@ -130,7 +130,11 @@ class TestBrightRegionExpansion:
         draw = ImageDraw.Draw(img)
         draw.rectangle((25, 20, 105, 160), fill=(245, 245, 245))
 
-        expanded = _expand_bright_region_bbox(img, (55, 65, 75, 125))
+        expanded = _expand_bright_region_bbox(
+            img,
+            (55, 65, 75, 125),
+            min_extra_row_height=30,
+        )
 
         assert expanded[0] <= 26
         assert expanded[1] <= 21
@@ -147,7 +151,11 @@ class TestBrightRegionExpansion:
         img = Image.new("RGB", (400, 500), (245, 245, 245))
         bbox = (190, 220, 210, 280)
 
-        expanded = _expand_bright_region_bbox(img, bbox)
+        expanded = _expand_bright_region_bbox(
+            img,
+            bbox,
+            min_extra_row_height=30,
+        )
 
         assert expanded[0] <= bbox[0]
         assert expanded[1] <= bbox[1]
@@ -155,6 +163,34 @@ class TestBrightRegionExpansion:
         assert expanded[3] >= bbox[3]
         assert expanded[2] - expanded[0] <= 140
         assert expanded[3] - expanded[1] <= 180
+
+    def test_requires_an_extra_vertical_row_of_border_space(self):
+        img = Image.new("RGB", (140, 180), (90, 90, 90))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((25, 20, 105, 160), fill=(245, 245, 245))
+        bbox = (55, 35, 75, 145)
+
+        assert _expand_bright_region_bbox(
+            img,
+            bbox,
+            min_extra_row_height=40,
+        ) == bbox
+
+    def test_rejects_normal_balloons_with_other_text_in_border_space(self):
+        img = Image.new("RGB", (220, 220), (90, 90, 90))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((25, 20, 195, 200), fill=(245, 245, 245))
+        # Simulate neighboring vertical text columns inside the same balloon.
+        for x in (55, 135):
+            draw.rectangle((x, 55, x + 9, 165), fill=(20, 20, 20))
+            draw.rectangle((x + 18, 70, x + 25, 150), fill=(20, 20, 20))
+        bbox = (92, 80, 112, 140)
+
+        assert _expand_bright_region_bbox(
+            img,
+            bbox,
+            min_extra_row_height=30,
+        ) == bbox
 
 
 class TestWordWrap:
