@@ -2,6 +2,7 @@
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+import kindle.text_renderer as text_renderer
 from kindle.text_renderer import (
     _is_sound_effect,
     _word_wrap,
@@ -21,6 +22,7 @@ from kindle.text_renderer import (
     _mask_safe_bbox,
     _vertical_furigana_char_height,
     _vertical_main_char_height,
+    render_furigana_vertical,
 )
 from kindle.config import FONT_EN
 
@@ -358,6 +360,44 @@ class TestBrightRegionExpansion:
             bbox,
             min_extra_row_height=30,
         ) == bbox
+
+    def test_render_uses_layout_image_for_no_mask_expansion(self, monkeypatch):
+        target = Image.new("RGB", (120, 160), "white")
+        source = Image.new("RGB", (120, 160), "gray")
+        seen = []
+
+        def fake_layout(img, bbox, min_extra_row_height=None):
+            seen.append(img)
+            return bbox
+
+        monkeypatch.setattr(text_renderer, "_no_mask_furigana_layout_bbox", fake_layout)
+
+        render_furigana_vertical(
+            target,
+            (40, 30, 80, 130),
+            [{"text": "空腹", "furigana": "くうふく", "needs_furigana": True}],
+            layout_img=source,
+        )
+
+        assert seen == [source]
+
+    def test_render_defaults_to_target_for_no_mask_layout(self, monkeypatch):
+        target = Image.new("RGB", (120, 160), "white")
+        seen = []
+
+        def fake_layout(img, bbox, min_extra_row_height=None):
+            seen.append(img)
+            return bbox
+
+        monkeypatch.setattr(text_renderer, "_no_mask_furigana_layout_bbox", fake_layout)
+
+        render_furigana_vertical(
+            target,
+            (40, 30, 80, 130),
+            [{"text": "空腹", "furigana": "くうふく", "needs_furigana": True}],
+        )
+
+        assert seen == [target]
 
 
 class TestWordWrap:

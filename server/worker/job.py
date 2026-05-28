@@ -336,7 +336,8 @@ def _rerender_from_metadata(job: ProcessingJob,
                                      source_font_size=item.get("source_font_size"),
                                      page_font_cap=page_font_cap,
                                      source_outlier_threshold=source_outlier_threshold,
-                                     page_font_floor=page_font_floor)
+                                     page_font_floor=page_font_floor,
+                                     layout_img=img_pil)
         else:
             render_english(img_out, item["bbox"], item["value"],
                            base_font_size=base_font_size, mask=item["mask"])

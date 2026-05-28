@@ -12,6 +12,7 @@ from kindle.processor import (
     ocr_bubble,
     transform_furigana,
     transform_translate,
+    _render_page_image,
 )
 
 
@@ -105,3 +106,33 @@ class TestTransformTranslate:
                           ocr_text="", is_valid=False)
         transform_translate(br)
         assert br.transformed is None
+
+
+class TestRenderPageImage:
+    @patch("kindle.processor.clear_text_strokes")
+    @patch("kindle.processor.render_furigana_vertical")
+    def test_furigana_passes_original_image_for_layout(self, mock_render, mock_clear):
+        source = Image.new("RGB", (100, 140), "gray")
+        page = PageResult(
+            image_path="/tmp/page.png",
+            name="page",
+            img_pil=source,
+            output_img=source.copy(),
+            bubble_results=[
+                BubbleResult(
+                    bbox=(20, 20, 70, 100),
+                    ocr_text="空腹",
+                    is_valid=True,
+                    transformed=[{
+                        "text": "空腹",
+                        "furigana": "くうふく",
+                        "needs_furigana": True,
+                    }],
+                    source_font_size=20,
+                )
+            ],
+        )
+
+        _render_page_image(page, PipelineMode.FURIGANA)
+
+        assert mock_render.call_args.kwargs["layout_img"] is source

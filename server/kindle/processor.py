@@ -295,7 +295,8 @@ def _render_page_image(page: PageResult, mode: PipelineMode,
                                      source_font_size=br.source_font_size,
                                      page_font_cap=page_font_cap,
                                      source_outlier_threshold=source_outlier_threshold,
-                                     page_font_floor=page_font_floor)
+                                     page_font_floor=page_font_floor,
+                                     layout_img=page.img_pil)
         else:
             size = font_sizes.get(i, base_font_size)
             render_english(page.output_img, br.bbox, br.transformed,

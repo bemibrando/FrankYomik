@@ -558,12 +558,15 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
                              source_font_size: int | None = None,
                              page_font_cap: int | None = None,
                              source_outlier_threshold: int | None = None,
-                             page_font_floor: int | None = None) -> None:
+                             page_font_floor: int | None = None,
+                             layout_img: Image.Image | None = None) -> None:
     """Render vertical Japanese text with furigana inside a bubble region.
 
     When `mask` is provided, the bbox is first tightened to the mask's
     interior (same as English rendering) so text is sized to the actual
     bubble shape, then renders to an RGBA overlay and clips to mask.
+    When `layout_img` is provided, no-mask bright-region layout uses that
+    original source image while drawing still happens on `img`.
     """
     if mask is not None:
         bbox = _mask_safe_bbox(bbox, mask, vertical=True)
@@ -602,7 +605,7 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
         initial_font_size = _fit_vertical_font_size(chars, bw, bh)
         original_font_size = initial_font_size
         bbox = _no_mask_furigana_layout_bbox(
-            img,
+            layout_img if layout_img is not None else img,
             bbox,
             min_extra_row_height=_vertical_main_char_height(initial_font_size),
         )
