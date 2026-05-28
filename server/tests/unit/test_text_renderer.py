@@ -10,6 +10,7 @@ from kindle.text_renderer import (
     _furigana_font_size,
     _fit_vertical_font_size,
     _fit_furigana_stack,
+    _expand_bright_region_bbox,
     _mask_safe_bbox,
     _vertical_furigana_char_height,
     _vertical_main_char_height,
@@ -119,6 +120,41 @@ class TestMaskSafeBBox:
         assert vertical[0] < horizontal[0]
         assert vertical[2] > horizontal[2]
         assert vertical[3] - vertical[1] > horizontal[3] - horizontal[1]
+
+
+class TestBrightRegionExpansion:
+    """No-mask furigana should use nearby white caption/glow space."""
+
+    def test_expands_tight_text_box_to_bright_region(self):
+        img = Image.new("RGB", (140, 180), (90, 90, 90))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((25, 20, 105, 160), fill=(245, 245, 245))
+
+        expanded = _expand_bright_region_bbox(img, (55, 65, 75, 125))
+
+        assert expanded[0] <= 26
+        assert expanded[1] <= 21
+        assert expanded[2] >= 104
+        assert expanded[3] >= 159
+
+    def test_leaves_box_when_no_bright_region_overlaps(self):
+        img = Image.new("RGB", (100, 100), (80, 80, 80))
+        bbox = (40, 30, 60, 70)
+
+        assert _expand_bright_region_bbox(img, bbox) == bbox
+
+    def test_caps_large_bright_background_expansion(self):
+        img = Image.new("RGB", (400, 500), (245, 245, 245))
+        bbox = (190, 220, 210, 280)
+
+        expanded = _expand_bright_region_bbox(img, bbox)
+
+        assert expanded[0] <= bbox[0]
+        assert expanded[1] <= bbox[1]
+        assert expanded[2] >= bbox[2]
+        assert expanded[3] >= bbox[3]
+        assert expanded[2] - expanded[0] <= 140
+        assert expanded[3] - expanded[1] <= 180
 
 
 class TestWordWrap:

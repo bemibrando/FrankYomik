@@ -25,6 +25,13 @@ _VERTICAL_MASK_VERTICAL_INSET_PCT = 5
 _VERTICAL_MASK_WIDTH_PCT = 70
 _MAIN_VERTICAL_METRIC_CHARS = "漢今藤原拓海接触鬼神全力"
 _FURIGANA_METRIC_CHARS = "きょうせつふじわらたくみ"
+_BRIGHT_REGION_THRESHOLD = 205
+_BRIGHT_REGION_MIN_PAD = 24
+_BRIGHT_REGION_MAX_WIDTH_RATIO = 3.0
+_BRIGHT_REGION_MAX_HEIGHT_RATIO = 2.0
+_BRIGHT_REGION_MAX_WIDTH_EXTRA = 120
+_BRIGHT_REGION_MAX_HEIGHT_EXTRA = 120
+_BRIGHT_REGION_MIN_AREA_GAIN = 1.15
 
 log = logging.getLogger(__name__)
 
@@ -535,6 +542,8 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
     """
     if mask is not None:
         bbox = _mask_safe_bbox(bbox, mask, vertical=True)
+    else:
+        bbox = _expand_bright_region_bbox(img, bbox)
 
     x1, y1, x2, y2 = bbox
     bw = x2 - x1 - 2 * TEXT_MARGIN
@@ -757,6 +766,111 @@ def _fit_furigana_stack(target_size: int, total_height: int,
         if char_height * count <= total_height:
             return size, char_height
     return min_size, max(1, total_height // count)
+
+
+def _expand_bright_region_bbox(img: Image.Image,
+                               bbox: tuple[int, int, int, int]
+                               ) -> tuple[int, int, int, int]:
+    """Expand no-mask furigana boxes into nearby white caption space.
+
+    RT-DETR ``text_free`` detections are often tight around the original text,
+    even when the manga has a larger soft white glow/caption region around it.
+    If we size to that tight text bbox, the furigana render looks small and
+    oddly spaced despite visible whitespace nearby.  For no-mask furigana only,
+    find the bright connected component overlapping the text bbox and size to
+    that component, capped so page gutters/margins cannot explode the region.
+    """
+    import cv2
+
+    img_w, img_h = img.size
+    x1, y1, x2, y2 = _clamp_bbox(bbox, img_w, img_h)
+    bw = x2 - x1
+    bh = y2 - y1
+    if bw < 8 or bh < 8:
+        return bbox
+
+    max_w = max(bw, int(bw * _BRIGHT_REGION_MAX_WIDTH_RATIO),
+                bw + _BRIGHT_REGION_MAX_WIDTH_EXTRA)
+    max_h = max(bh, int(bh * _BRIGHT_REGION_MAX_HEIGHT_RATIO),
+                bh + _BRIGHT_REGION_MAX_HEIGHT_EXTRA)
+    pad_x = max(_BRIGHT_REGION_MIN_PAD, (max_w - bw) // 2)
+    pad_y = max(_BRIGHT_REGION_MIN_PAD, (max_h - bh) // 2)
+    sx1 = max(0, x1 - pad_x)
+    sy1 = max(0, y1 - pad_y)
+    sx2 = min(img_w, x2 + pad_x)
+    sy2 = min(img_h, y2 + pad_y)
+    if sx2 <= sx1 or sy2 <= sy1:
+        return bbox
+
+    gray = np.array(img.crop((sx1, sy1, sx2, sy2)).convert("L"))
+    bright = (gray >= _BRIGHT_REGION_THRESHOLD).astype(np.uint8)
+    if not np.any(bright):
+        return bbox
+
+    # Bridge scan noise / tiny dark holes in white glows without merging across
+    # large dark artwork regions.
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, kernel, iterations=1)
+    labels_n, labels, stats, _ = cv2.connectedComponentsWithStats(bright, 8)
+    if labels_n <= 1:
+        return bbox
+
+    lx1, ly1 = x1 - sx1, y1 - sy1
+    lx2, ly2 = x2 - sx1, y2 - sy1
+    overlap = labels[max(0, ly1):max(0, ly2), max(0, lx1):max(0, lx2)]
+    if overlap.size == 0:
+        return bbox
+
+    candidate_labels, counts = np.unique(overlap[overlap > 0], return_counts=True)
+    if len(candidate_labels) == 0:
+        return bbox
+    label = int(candidate_labels[int(np.argmax(counts))])
+
+    rx = int(stats[label, cv2.CC_STAT_LEFT])
+    ry = int(stats[label, cv2.CC_STAT_TOP])
+    rw = int(stats[label, cv2.CC_STAT_WIDTH])
+    rh = int(stats[label, cv2.CC_STAT_HEIGHT])
+    ex1, ey1 = sx1 + rx, sy1 + ry
+    ex2, ey2 = ex1 + rw, ey1 + rh
+
+    # Never shrink below the original detection.
+    ex1 = min(ex1, x1)
+    ey1 = min(ey1, y1)
+    ex2 = max(ex2, x2)
+    ey2 = max(ey2, y2)
+
+    ex1, ex2 = _cap_interval(ex1, ex2, x1, x2, max_w, sx1, sx2)
+    ey1, ey2 = _cap_interval(ey1, ey2, y1, y2, max_h, sy1, sy2)
+
+    if (ex2 - ex1) * (ey2 - ey1) < bw * bh * _BRIGHT_REGION_MIN_AREA_GAIN:
+        return bbox
+    return (ex1, ey1, ex2, ey2)
+
+
+def _clamp_bbox(bbox: tuple[int, int, int, int], img_w: int, img_h: int
+                ) -> tuple[int, int, int, int]:
+    x1, y1, x2, y2 = bbox
+    x1 = max(0, min(img_w, int(x1)))
+    y1 = max(0, min(img_h, int(y1)))
+    x2 = max(0, min(img_w, int(x2)))
+    y2 = max(0, min(img_h, int(y2)))
+    return x1, y1, x2, y2
+
+
+def _cap_interval(left: int, right: int, orig_left: int, orig_right: int,
+                  max_len: int, min_left: int, max_right: int) -> tuple[int, int]:
+    if right - left <= max_len:
+        return left, right
+    center = (orig_left + orig_right) // 2
+    left = center - max_len // 2
+    right = left + max_len
+    if left < min_left:
+        left = min_left
+        right = min(max_right, left + max_len)
+    if right > max_right:
+        right = max_right
+        left = max(min_left, right - max_len)
+    return left, right
 
 
 def _font_background_cell_height(font_size: int, chars: str, bg_pad: int,
