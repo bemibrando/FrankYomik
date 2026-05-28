@@ -333,6 +333,29 @@ class TestProcessJobManga:
         assert region["user"] == {"manual_translation": ""}
         assert "false_positive" not in region["user"]
 
+    @patch("kindle.processor.estimate_source_vertical_font_size", return_value=22)
+    @patch("worker.job.ocr_bubble")
+    @patch("worker.job.detect_page_bubbles")
+    def test_furigana_metadata_records_source_font_size(
+        self, mock_detect, mock_ocr, mock_estimate
+    ):
+        def add_bubble(page):
+            page.bubbles_raw = [{"bbox": (10, 10, 80, 100)}]
+        mock_detect.side_effect = add_bubble
+        mock_ocr.return_value = BubbleResult(
+            bbox=(10, 10, 80, 100), ocr_text="漢字", is_valid=True,
+            transformed=[{"text": "漢字", "furigana": "かんじ",
+                          "needs_furigana": True}],
+        )
+
+        result = process_job(ProcessingJob(
+            job_id="meta-furi", pipeline="manga_furigana",
+            image_bytes=_make_test_image_bytes(120, 140), source_hash="abc123",
+        ))
+
+        assert result.status == "completed"
+        assert result.metadata_payload["regions"][0]["source_font_size"] == 22
+
 
 # --- Webtoon pipeline routing ---
 
@@ -600,6 +623,40 @@ class TestRerenderFromMetadata:
         result = process_job(job)
         assert result.status == "completed"
         assert result.bubble_count == 1
+
+    @patch("worker.job.render_furigana_vertical")
+    def test_rerender_furigana_uses_source_font_size(self, mock_render):
+        """Furigana rerender should preserve per-bubble source scale caps."""
+        img_bytes = _make_test_image_bytes(200, 300)
+        segments = [{"text": "漢字", "furigana": "かんじ", "needs_furigana": True}]
+        job = ProcessingJob(
+            job_id="rr-furi-source",
+            pipeline="manga_furigana",
+            image_bytes=img_bytes,
+            rerender_from_metadata=True,
+            metadata_payload={
+                "regions": [
+                    {
+                        "id": "r1",
+                        "kind": "bubble",
+                        "bbox": [10, 10, 90, 90],
+                        "ocr_text": "漢字",
+                        "source_font_size": 22,
+                        "transformed": {
+                            "kind": "furigana_segments",
+                            "value": segments,
+                        },
+                        "user": {"manual_translation": ""},
+                    },
+                ],
+            },
+        )
+
+        result = process_job(job)
+
+        assert result.status == "completed"
+        assert result.bubble_count == 1
+        assert mock_render.call_args.kwargs["source_font_size"] == 22
 
 
 # --- Parallel translation ---

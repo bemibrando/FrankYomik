@@ -36,6 +36,10 @@ _BRIGHT_REGION_MAX_BORDER_HOLE_RATIO = 0.015
 _BRIGHT_REGION_MAX_BORDER_HOLE_PIXELS = 24
 _FURIGANA_EXPANDED_MAX_FONT_RATIO = 1.30
 _FURIGANA_EXPANDED_MAX_FONT_EXTRA = 8
+_FURIGANA_SOURCE_MAX_FONT_RATIO = 1.30
+_FURIGANA_SOURCE_MAX_FONT_EXTRA = 8
+_SOURCE_FONT_MAX_DARK_DENSITY = 0.35
+_SOURCE_FONT_MIN_DARK_PIXELS = 12
 
 log = logging.getLogger(__name__)
 
@@ -537,7 +541,8 @@ _VERTICAL_ROTATE_CHARS = frozenset("ー～—")
 
 def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
                              segments: list[dict],
-                             mask: 'np.ndarray | None' = None) -> None:
+                             mask: 'np.ndarray | None' = None,
+                             source_font_size: int | None = None) -> None:
     """Render vertical Japanese text with furigana inside a bubble region.
 
     When `mask` is provided, the bbox is first tightened to the mask's
@@ -597,6 +602,8 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
             font_size,
             original_font_size,
         )
+    if source_font_size is not None:
+        font_size = _cap_furigana_to_source_scale(font_size, source_font_size)
     furi_size = _furigana_font_size(font_size)
 
     font = _load_font(FONT_JP, font_size)
@@ -774,6 +781,138 @@ def _cap_expanded_furigana_font_size(fitted_size: int,
     ratio_cap = int(round(original_size * _FURIGANA_EXPANDED_MAX_FONT_RATIO))
     extra_cap = original_size + _FURIGANA_EXPANDED_MAX_FONT_EXTRA
     return max(MIN_FONT_SIZE, min(fitted_size, ratio_cap, extra_cap))
+
+
+def _cap_furigana_to_source_scale(fitted_size: int, source_size: int) -> int:
+    """Cap rendered furigana near the original glyph scale for this bubble.
+
+    This is deliberately per-bubble.  Large original scream/SFX text can still
+    render large because its source estimate is large, while short normal text
+    in a spacious balloon cannot balloon into an unrelated headline size.
+    """
+    if source_size <= 0 or fitted_size <= source_size:
+        return fitted_size
+    ratio_cap = int(round(source_size * _FURIGANA_SOURCE_MAX_FONT_RATIO))
+    extra_cap = source_size + _FURIGANA_SOURCE_MAX_FONT_EXTRA
+    return max(MIN_FONT_SIZE, min(fitted_size, ratio_cap, extra_cap))
+
+
+def estimate_source_vertical_font_size(
+    img: Image.Image,
+    bbox: tuple[int, int, int, int],
+    ocr_text: str = "",
+    mask: 'np.ndarray | None' = None,
+) -> int | None:
+    """Estimate the original vertical Japanese glyph size in one bubble.
+
+    Returns None when the crop is too dense/noisy to trust.  The renderer then
+    falls back to geometric fitting rather than over-shrinking from bad data.
+    """
+    try:
+        import cv2
+    except Exception:
+        return None
+
+    img_w, img_h = img.size
+    if mask is not None:
+        bbox = _mask_safe_bbox(bbox, mask, vertical=True)
+    x1, y1, x2, y2 = _clamp_bbox(bbox, img_w, img_h)
+    if x2 - x1 < 10 or y2 - y1 < 10:
+        return None
+
+    crop = np.array(img.crop((x1, y1, x2, y2)).convert("L"))
+    valid = np.ones(crop.shape, dtype=bool)
+    if mask is not None:
+        valid = mask[y1:y2, x1:x2] > 0
+
+    inset_x = max(2, (x2 - x1) // 25)
+    inset_y = max(2, (y2 - y1) // 25)
+    valid[:inset_y, :] = False
+    valid[-inset_y:, :] = False
+    valid[:, :inset_x] = False
+    valid[:, -inset_x:] = False
+    if not np.any(valid):
+        return None
+
+    dark = (crop < 150) & valid
+    dark_pixels = int(np.count_nonzero(dark))
+    valid_pixels = int(np.count_nonzero(valid))
+    if dark_pixels < _SOURCE_FONT_MIN_DARK_PIXELS or valid_pixels <= 0:
+        return None
+    if dark_pixels / valid_pixels > _SOURCE_FONT_MAX_DARK_DENSITY:
+        return None
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
+    dark_u8 = cv2.morphologyEx(dark.astype(np.uint8), cv2.MORPH_CLOSE, kernel,
+                               iterations=1)
+    labels_n, labels, stats, _ = cv2.connectedComponentsWithStats(dark_u8, 8)
+    if labels_n <= 1:
+        return None
+
+    crop_h, crop_w = crop.shape
+    sizes: list[int] = []
+    for label in range(1, labels_n):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        cx = int(stats[label, cv2.CC_STAT_LEFT])
+        cy = int(stats[label, cv2.CC_STAT_TOP])
+        cw = int(stats[label, cv2.CC_STAT_WIDTH])
+        ch = int(stats[label, cv2.CC_STAT_HEIGHT])
+        if area < max(4, valid_pixels // 6000):
+            continue
+        if cw < 2 or ch < 2:
+            continue
+        # Drop panel/bubble border fragments and long rule lines.
+        if cw > crop_w * 0.70 and ch < crop_h * 0.08:
+            continue
+        if ch > crop_h * 0.70 and cw < crop_w * 0.08:
+            continue
+        touches_edge = cx <= inset_x or cy <= inset_y or (
+            cx + cw >= crop_w - inset_x or cy + ch >= crop_h - inset_y)
+        if touches_edge and (cw > crop_w * 0.35 or ch > crop_h * 0.35):
+            continue
+        sizes.append(max(cw, ch))
+
+    if not sizes:
+        return None
+
+    size = int(round(float(np.percentile(sizes, 75)) * 1.10))
+
+    # If OCR text length gives a plausible vertical run estimate, blend it in.
+    # This stabilizes multi-stroke kanji whose connected components split small.
+    char_count = _source_text_char_count(ocr_text)
+    if char_count >= 2:
+        ys, xs = np.where(dark_u8 > 0)
+        if len(xs) > 0:
+            ink_h = int(ys.max() - ys.min() + 1)
+            cols = _estimate_vertical_text_columns(dark_u8)
+            chars_per_col = max(1, int(np.ceil(char_count / max(1, cols))))
+            run_est = int(round(ink_h / chars_per_col * 1.15))
+            if MIN_FONT_SIZE <= run_est <= MAX_FONT_SIZE:
+                size = max(size, run_est)
+
+    return max(MIN_FONT_SIZE, min(MAX_FONT_SIZE, size))
+
+
+def _source_text_char_count(text: str) -> int:
+    return sum(1 for ch in text if not ch.isspace())
+
+
+def _estimate_vertical_text_columns(dark: np.ndarray) -> int:
+    """Estimate main vertical text columns from x-projection clusters."""
+    projection = dark.sum(axis=0)
+    active = projection >= max(2, int(dark.shape[0] * 0.03))
+    clusters = []
+    start = None
+    for idx, value in enumerate(active):
+        if value and start is None:
+            start = idx
+        elif not value and start is not None:
+            if idx - start >= 2:
+                clusters.append((start, idx))
+            start = None
+    if start is not None and len(active) - start >= 2:
+        clusters.append((start, len(active)))
+    return max(1, min(6, len(clusters)))
 
 
 @lru_cache(maxsize=128)

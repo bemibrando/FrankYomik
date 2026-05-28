@@ -25,7 +25,11 @@ from kindle.processor import (
     transform_furigana,
 )
 from kindle.translator import translate
-from kindle.text_renderer import render_english, render_furigana_vertical
+from kindle.text_renderer import (
+    estimate_source_vertical_font_size,
+    render_english,
+    render_furigana_vertical,
+)
 
 log = logging.getLogger(__name__)
 
@@ -176,6 +180,15 @@ def _region_manual_text(region: dict[str, Any]) -> str:
     return ""
 
 
+def _region_source_font_size(region: dict[str, Any]) -> int | None:
+    value = region.get("source_font_size")
+    try:
+        size = int(value)
+    except (TypeError, ValueError):
+        return None
+    return size if size > 0 else None
+
+
 def _build_region(
     region_id: str,
     kind: str,
@@ -185,10 +198,11 @@ def _build_region(
     ocr_text: str,
     is_valid: bool,
     transformed: dict[str, Any] | None = None,
+    source_font_size: int | None = None,
 ) -> dict[str, Any]:
     """Build a standardised region dict for metadata payloads."""
     bbox_tuple = tuple(int(v) for v in bbox)
-    return {
+    region = {
         "id": region_id,
         "kind": kind,
         "bbox": list(bbox_tuple),
@@ -198,6 +212,9 @@ def _build_region(
         "transformed": transformed,
         "user": {"manual_translation": ""},
     }
+    if source_font_size is not None:
+        region["source_font_size"] = int(source_font_size)
+    return region
 
 
 def _build_metadata_payload(
@@ -269,8 +286,17 @@ def _rerender_from_metadata(job: ProcessingJob,
                 transformed_val = furigana_annotate(manual)
             if not isinstance(transformed_val, list):
                 continue
+            source_font_size = _region_source_font_size(region)
+            if source_font_size is None:
+                source_font_size = estimate_source_vertical_font_size(
+                    img_pil,
+                    bbox,
+                    str(region.get("ocr_text") or manual or ""),
+                    mask=mask,
+                )
             render_items.append({"bbox": bbox, "mask": mask, "kind": kind,
-                                 "mode": "furigana", "value": transformed_val})
+                                 "mode": "furigana", "value": transformed_val,
+                                 "source_font_size": source_font_size})
         else:
             text = manual
             if not text:
@@ -297,7 +323,8 @@ def _rerender_from_metadata(job: ProcessingJob,
     for item in render_items:
         if item["mode"] == "furigana":
             render_furigana_vertical(img_out, item["bbox"], item["value"],
-                                     mask=item["mask"])
+                                     mask=item["mask"],
+                                     source_font_size=item.get("source_font_size"))
         else:
             render_english(img_out, item["bbox"], item["value"],
                            base_font_size=base_font_size, mask=item["mask"])
@@ -400,6 +427,7 @@ def _process_manga(job: ProcessingJob,
             ocr_text=br.ocr_text,
             is_valid=bool(br.is_valid),
             transformed=transformed_obj,
+            source_font_size=br.source_font_size,
         ))
 
     return ProcessingResult(

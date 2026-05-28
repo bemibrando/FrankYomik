@@ -8,6 +8,8 @@ from kindle.text_renderer import (
     _break_word_to_fit,
     _choose_layout,
     _cap_expanded_furigana_font_size,
+    _cap_furigana_to_source_scale,
+    estimate_source_vertical_font_size,
     _furigana_font_size,
     _fit_vertical_font_size,
     _fit_furigana_stack,
@@ -111,6 +113,49 @@ class TestFuriganaSizing:
 
     def test_expanded_furigana_cap_does_not_force_growth(self):
         assert _cap_expanded_furigana_font_size(18, 20) == 18
+
+    def test_source_scale_cap_is_per_bubble(self):
+        assert _cap_furigana_to_source_scale(60, 20) == 26
+        assert _cap_furigana_to_source_scale(18, 20) == 18
+
+    def test_estimates_small_source_text_in_large_bubble(self):
+        img = Image.new("RGB", (160, 220), "white")
+        draw = ImageDraw.Draw(img)
+        for y in range(55, 145, 22):
+            draw.rectangle((72, y, 88, y + 12), fill="black")
+
+        size = estimate_source_vertical_font_size(
+            img,
+            (20, 20, 140, 200),
+            "空腹食事",
+        )
+
+        assert size is not None
+        assert 10 <= size <= 30
+
+    def test_estimates_larger_source_text_larger(self):
+        img = Image.new("RGB", (180, 240), "white")
+        draw = ImageDraw.Draw(img)
+        for y in range(45, 175, 38):
+            draw.rectangle((66, y, 106, y + 28), fill="black")
+
+        size = estimate_source_vertical_font_size(
+            img,
+            (20, 20, 160, 220),
+            "空腹食事",
+        )
+
+        assert size is not None
+        assert size >= 30
+
+    def test_source_estimate_rejects_dense_artwork(self):
+        img = Image.new("RGB", (120, 120), (40, 40, 40))
+
+        assert estimate_source_vertical_font_size(
+            img,
+            (10, 10, 110, 110),
+            "空腹",
+        ) is None
 
 
 class TestMaskSafeBBox:
