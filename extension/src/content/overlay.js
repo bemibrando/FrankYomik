@@ -65,7 +65,8 @@
     let bestScore = -Infinity;
     for (const img of imgs) {
       if (!img.src || !(img.src.startsWith('blob:') || img.dataset.frankTranslated === 'true')) continue;
-      if (img.dataset.frankTranslated === 'true' && img.dataset.frankPageId && img.dataset.frankPageId !== pageId) {
+      if (img.dataset.frankTranslated === 'true' && img.dataset.frankPageId
+          && !samePageIgnoringForce(img.dataset.frankPageId, pageId)) {
         continue;
       }
       const rect = img.getBoundingClientRect();
@@ -125,6 +126,14 @@
       return toonImgs[numericIndex];
     }
     return null;
+  }
+
+  // Force-reprocess appends "-force-<timestamp>" to the captured pageId; a
+  // second force on the same page appends another. Two pageIds refer to the
+  // same logical page when they match after stripping all such suffixes.
+  function samePageIgnoringForce(a, b) {
+    const stripped = (s) => String(s || '').replace(/(?:-force-\d+)+$/, '');
+    return stripped(a) === stripped(b);
   }
 
   function findReaderRoot() {
