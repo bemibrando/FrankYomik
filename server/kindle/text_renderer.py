@@ -48,6 +48,10 @@ _NO_MASK_TIGHTEN_MAX_FILL = 0.80
 # stray bright specks) and skip tightening. A real title/narration plate is at
 # least ~30x15 pixels.
 _NO_MASK_TIGHTEN_MIN_AREA_PX = 400
+# Aspect ratio above which we treat a detection as horizontal source text
+# (chapter title strips, narration banners) and render the new furigana glyphs
+# left-to-right instead of in vertical columns.
+_WIDE_BBOX_HORIZONTAL_RATIO = 2.5
 _FURIGANA_EXPANDED_MAX_FONT_RATIO = 1.15
 _FURIGANA_EXPANDED_MAX_FONT_EXTRA = 4
 _FURIGANA_SOURCE_MAX_FONT_RATIO = 1.15
@@ -610,6 +614,22 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
     if not chars:
         return
 
+    # Wide-short bboxes belong to horizontal source text (chapter title strips,
+    # narration banners). Stacking chars into vertical columns scatters new
+    # white-backed glyphs onto adjacent artwork and looks worse than just
+    # laying them out left-to-right where the original text was.
+    if bw >= bh * _WIDE_BBOX_HORIZONTAL_RATIO:
+        _render_furigana_horizontal(
+            img, bbox, chars,
+            mask=mask,
+            source_font_size=source_font_size,
+            page_font_cap=page_font_cap,
+            source_outlier_threshold=source_outlier_threshold,
+            page_font_floor=page_font_floor,
+            layout_img=layout_img,
+        )
+        return
+
     original_font_size = None
     if mask is None:
         initial_font_size = _fit_vertical_font_size(chars, bw, bh)
@@ -777,6 +797,129 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
                 furi_y += furi_char_h
 
         char_y += char_height
+
+    if mask is not None:
+        overlay_arr = np.array(overlay)
+        overlay_arr[:, :, 3][mask == 0] = 0
+        overlay = Image.fromarray(overlay_arr)
+        img.paste(Image.alpha_composite(img.convert("RGBA"), overlay).convert("RGB"))
+
+
+def _render_furigana_horizontal(
+    img: Image.Image,
+    bbox: tuple[int, int, int, int],
+    chars: list[dict],
+    mask: 'np.ndarray | None' = None,
+    source_font_size: int | None = None,
+    page_font_cap: int | None = None,
+    source_outlier_threshold: int | None = None,
+    page_font_floor: int | None = None,
+    layout_img: Image.Image | None = None,
+) -> None:
+    """Render furigana chars left-to-right for wide-short detections.
+
+    Used when the source text was horizontal (chapter title strips, narration
+    banners). Each char sits on the baseline; furigana, if any, stacks above
+    its kanji. The block is centered in the bbox.
+    """
+    x1, y1, x2, y2 = bbox
+    bw = x2 - x1 - 2 * TEXT_MARGIN
+    bh = y2 - y1 - 2 * TEXT_MARGIN
+    if bw < 10 or bh < 10:
+        return
+
+    has_furigana = any(c["furigana"] for c in chars)
+    n = len(chars)
+
+    # Binary search the largest font size that fits all chars in one row
+    # (or multiple rows if needed) within the bbox.
+    lo, hi = MIN_FONT_SIZE, min(MAX_FONT_SIZE, bh)
+    best = lo
+    for _ in range(15):
+        mid = (lo + hi) // 2
+        furi_size = _furigana_font_size(mid) if has_furigana else 0
+        row_height = mid + (furi_size + 2 if has_furigana else 0) + 2
+        chars_per_row = max(1, bw // mid)
+        rows_needed = (n + chars_per_row - 1) // chars_per_row
+        if rows_needed * row_height <= bh:
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+
+    font_size = best
+    if source_font_size is not None:
+        font_size = _cap_furigana_to_source_scale(font_size, source_font_size)
+    font_size = _cap_furigana_to_page_dialogue_scale(
+        font_size,
+        source_font_size=source_font_size,
+        page_font_cap=page_font_cap,
+        source_outlier_threshold=source_outlier_threshold,
+    )
+    font_size = max(MIN_FONT_SIZE, font_size)
+
+    furi_size = _furigana_font_size(font_size) if has_furigana else 0
+    row_height = font_size + (furi_size + 2 if has_furigana else 0) + 2
+    chars_per_row = max(1, bw // font_size)
+    rows_needed = (n + chars_per_row - 1) // chars_per_row
+
+    font = _load_font(FONT_JP, font_size)
+    furi_font = _load_font(FONT_JP, furi_size) if has_furigana else None
+
+    if mask is not None:
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay)
+        bg_fill = (255, 255, 255, 255)
+        text_fill = (0, 0, 0, 255)
+    else:
+        draw = ImageDraw.Draw(img)
+        bg_fill = "white"
+        text_fill = "black"
+
+    block_h = rows_needed * row_height
+    start_y = y1 + TEXT_MARGIN + max(0, (bh - block_h) // 2)
+
+    for row in range(rows_needed):
+        row_chars = chars[row * chars_per_row:(row + 1) * chars_per_row]
+        if not row_chars:
+            continue
+        row_w = len(row_chars) * font_size
+        start_x = x1 + TEXT_MARGIN + max(0, (bw - row_w) // 2)
+        cy = start_y + row * row_height
+        if has_furigana:
+            cy += furi_size + 2
+
+        for col, ch_info in enumerate(row_chars):
+            ch = ch_info["char"]
+            cx = start_x + col * font_size
+            ch_bbox = draw.textbbox((0, 0), ch, font=font)
+            ch_w = ch_bbox[2] - ch_bbox[0]
+            ch_h = ch_bbox[3] - ch_bbox[1]
+            bg_x = cx + (font_size - ch_w) // 2 + ch_bbox[0]
+            bg_y = cy + ch_bbox[1]
+            draw.rectangle(
+                (bg_x - _TEXT_BG_PAD, bg_y - _TEXT_BG_PAD,
+                 bg_x + ch_w + _TEXT_BG_PAD, bg_y + ch_h + _TEXT_BG_PAD),
+                fill=bg_fill,
+            )
+            draw.text((cx + (font_size - ch_w) // 2, cy), ch,
+                      fill=text_fill, font=font)
+
+            if has_furigana and ch_info.get("furigana") and furi_font is not None:
+                furi_text = ch_info["furigana"]
+                fc_bbox = draw.textbbox((0, 0), furi_text, font=furi_font)
+                fc_w = fc_bbox[2] - fc_bbox[0]
+                fc_h = fc_bbox[3] - fc_bbox[1]
+                fcx = cx + (font_size - fc_w) // 2
+                fcy = cy - furi_size - 2
+                fbg_x = fcx + fc_bbox[0]
+                fbg_y = fcy + fc_bbox[1]
+                draw.rectangle(
+                    (fbg_x - 1, fbg_y - 1,
+                     fbg_x + fc_w + 1, fbg_y + fc_h + 1),
+                    fill=bg_fill,
+                )
+                draw.text((fcx, fcy), furi_text, fill=text_fill, font=furi_font)
 
     if mask is not None:
         overlay_arr = np.array(overlay)

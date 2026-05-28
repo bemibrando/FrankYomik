@@ -20,6 +20,7 @@ from kindle.text_renderer import (
     _expand_limited_no_mask_bbox,
     _no_mask_furigana_layout_bbox,
     _tighten_no_mask_bbox_to_bright_region,
+    _WIDE_BBOX_HORIZONTAL_RATIO,
     _mask_safe_bbox,
     _vertical_furigana_char_height,
     _vertical_main_char_height,
@@ -375,6 +376,21 @@ class TestBrightRegionExpansion:
         bbox = (10, 10, 90, 90)
 
         assert _tighten_no_mask_bbox_to_bright_region(img, bbox) == bbox
+
+    def test_wide_short_bbox_routes_to_horizontal_furigana(self):
+        # Wide-short bbox (chapter title strip) should not crash when fed to
+        # the vertical entry point; the dispatcher renders it horizontally.
+        img = Image.new("RGB", (1200, 200), "white")
+        segments = [{"text": "現在60話エンジェルナンバー", "furigana": "げんざい",
+                     "needs_furigana": True}]
+        bbox = (50, 50, 1150, 150)  # 1100x100, ratio 11.0
+        bw = bbox[2] - bbox[0]
+        bh = bbox[3] - bbox[1]
+        assert bw >= bh * _WIDE_BBOX_HORIZONTAL_RATIO
+        # Should complete without exceptions and modify the image.
+        before = img.tobytes()
+        render_furigana_vertical(img, bbox, segments)
+        assert img.tobytes() != before
 
     def test_rejects_normal_balloons_with_other_text_in_border_space(self):
         img = Image.new("RGB", (220, 220), (90, 90, 90))
