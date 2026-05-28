@@ -345,7 +345,15 @@
     const translatedDataUrl = entry?.translatedDataUrl || (target.dataset.frankTranslated === 'true' ? await dataUrlFromSrc(target.src) : null);
     if (!originalDataUrl) throw new Error('Original debug image unavailable. Reload or turn the page to let Frank recapture the original.');
     if (!translatedDataUrl) throw new Error('Translated debug image unavailable for the current page.');
-    return { ok: true, site: 'kindle', pageId: entry?.pageId || target.dataset.frankPageId || 'current', originalDataUrl, translatedDataUrl };
+    return {
+      ok: true,
+      site: 'kindle',
+      pageId: entry?.pageId || target.dataset.frankPageId || 'current',
+      sourceUrl: location.href,
+      capture: entry?.capture || null,
+      originalDataUrl,
+      translatedDataUrl,
+    };
   }
 
   function finishGroup() {

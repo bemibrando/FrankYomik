@@ -37,6 +37,8 @@ Image → EasyOCR text detection → cluster into bubbles → Ollama translation
 
 **Web service**: Go API accepts images over HTTP, deduplicates via SHA256, queues through Redis Streams with priority ordering. Python workers process jobs and push results via Redis Pub/Sub + WebSocket.
 
+The protected debug API can also store original/translated page pairs uploaded from the Chromium extension. List recent pairs with `GET /api/v1/debug/pages`.
+
 **Flutter client**: Wraps Kindle (read.amazon.co.jp) and Naver Webtoon in a WebView, captures pages, submits them to the API, and overlays translated images in real-time. Supports auto-translate or manual translate-on-demand, per-volume pipeline selection (furigana vs English), and local SQLite caching.
 
 **Chromium extension**: Runs on desktop Chrome/Chromium, Brave, and Edge. It keeps Kindle and Naver pages visually close to stock: the content script detects the current page image, sends it to your self-hosted server, then swaps in the completed translated/furigana image. All settings live in the extension popup; the bearer token stays in the extension service worker and is never exposed to page scripts.
@@ -221,7 +223,9 @@ The desktop extension is the lightest way to use Frank Yomik directly on the Kin
 - Manga pipelines: English translation or furigana annotations
 - Webtoon pipeline: Korean → English
 - Per-site enable/disable, target-language selection, and webtoon prefetch settings
-- Manual force-reprocess and original-vs-translated debug image export from the popup
+- Manual force-reprocess and original-vs-translated debug pair upload from the popup
+
+Debug uploads are stored server-side and can be listed with `GET /api/v1/debug/pages`.
 
 ### Manual install from a GitHub release
 

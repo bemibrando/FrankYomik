@@ -162,7 +162,7 @@
   async function submitImage(item) {
     try {
       const imageDataUrl = await captureImage(item.src);
-      rememberDebug(item.pageId, { pageId: item.pageId, site: 'webtoon', index: item.index, originalSrc: item.src, originalDataUrl: imageDataUrl });
+      rememberDebug(item.pageId, { pageId: item.pageId, site: 'webtoon', index: item.index, originalSrc: item.src, originalDataUrl: imageDataUrl, capture: { originalSrc: item.src, index: item.index, pageMode: 'single' } });
       const response = await chrome.runtime.sendMessage({
         type: 'SUBMIT_CAPTURE',
         site: 'webtoon',
@@ -224,6 +224,7 @@
         index: message.capture?.index,
         originalSrc: message.capture?.originalSrc,
         translatedDataUrl: message.imageDataUrl,
+        capture: message.capture,
       });
     }
     return ok;
@@ -239,7 +240,7 @@
     if (!originalSrc || !isAllowedImageUrl(originalSrc)) throw new Error('Current webtoon original image URL is unavailable or not allowed.');
     const pageId = `wt-${index >= 0 ? index : 'current'}-force-${Date.now()}`;
     const imageDataUrl = await captureImage(originalSrc);
-    rememberDebug(pageId, { pageId, site: 'webtoon', index, originalSrc, originalDataUrl: imageDataUrl });
+    rememberDebug(pageId, { pageId, site: 'webtoon', index, originalSrc, originalDataUrl: imageDataUrl, capture: { originalSrc, index, pageMode: 'single' } });
     const response = await chrome.runtime.sendMessage({
       type: 'SUBMIT_CAPTURE',
       site: 'webtoon',
@@ -265,7 +266,16 @@
     const translatedDataUrl = entry?.translatedDataUrl || (img.dataset.frankTranslated === 'true' ? await dataUrlFromSrc(img.src) : null);
     if (!originalDataUrl) throw new Error('Original debug image unavailable for the current webtoon image.');
     if (!translatedDataUrl) throw new Error('Translated debug image unavailable for the current webtoon image.');
-    return { ok: true, site: 'webtoon', pageId: entry?.pageId || img.dataset.frankPageId || `wt-${img.dataset.frankIndex || 'current'}`, originalDataUrl, translatedDataUrl };
+    return {
+      ok: true,
+      site: 'webtoon',
+      pageId: entry?.pageId || img.dataset.frankPageId || `wt-${img.dataset.frankIndex || 'current'}`,
+      sourceUrl: location.href,
+      capture: entry?.capture || { originalSrc, index: img.dataset.frankIndex, pageMode: 'single' },
+      metadata: parseWebtoonMetadata(Number(img.dataset.frankIndex || 0)),
+      originalDataUrl,
+      translatedDataUrl,
+    };
   }
 
   function parseWebtoonMetadata(index) {

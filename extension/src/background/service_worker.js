@@ -101,7 +101,7 @@ async function handleMessage(message, sender) {
 async function runActiveTabAction(action) {
   const messageType = action === 'force-reprocess'
     ? 'FRANK_FORCE_REPROCESS_CURRENT'
-    : action === 'export-debug-pair'
+    : (action === 'export-debug-pair' || action === 'upload-debug-pair')
       ? 'FRANK_EXPORT_DEBUG_PAIR'
       : '';
   if (!messageType) throw new Error('unknown active tab action');
@@ -116,6 +116,9 @@ async function runActiveTabAction(action) {
     response = await chrome.tabs.sendMessage(tab.id, { type: messageType });
   }
   if (!response?.ok) throw new Error(response?.error || 'Content script could not run the action.');
+  if (action === 'upload-debug-pair') {
+    response = await uploadDebugPair(response, tab);
+  }
   await recordEvent({ site: response.site || 'extension', level: 'info', message: `Active tab action completed: ${action}` });
   return response;
 }
@@ -322,6 +325,46 @@ async function fetchWebtoonImage(message, sender) {
   if (blob.size > SIZE_LIMITS.maxCaptureDataUrlChars) throw new Error('webtoon source image is too large');
   if (blob.type && !blob.type.startsWith('image/')) throw new Error(`unexpected image type: ${blob.type}`);
   return { ok: true, imageDataUrl: await blobToDataUrl(blob) };
+}
+
+async function uploadDebugPair(pair, tab) {
+  const settings = await getSettings();
+  if (!settings.apiBaseUrl || !settings.authToken) {
+    throw new Error('Extension is not configured. Set API URL and auth token first.');
+  }
+  const site = pair.site === 'kindle' || pair.site === 'webtoon' ? pair.site : siteForTabUrl(tab.url || '');
+  if (!site) throw new Error('Debug pair must come from Kindle or Naver Webtoon.');
+  const original = await dataUrlToBlobAndBytes(assertImageDataUrl(pair.originalDataUrl, 'original'));
+  const translated = await dataUrlToBlobAndBytes(assertImageDataUrl(pair.translatedDataUrl, 'translated'));
+
+  const form = new FormData();
+  form.set('site', site);
+  form.set('page_id', safeText(pair.pageId || pair.page || 'current', 200));
+  form.set('source_url', safeText(pair.sourceUrl || tab.url || '', 2048));
+  form.set('original', original.blob, 'original.png');
+  form.set('translated', translated.blob, 'translated.png');
+  if (pair.capture) form.set('capture_json', JSON.stringify(sanitizeCapture(pair.capture)));
+  if (pair.metadata) form.set('metadata_json', JSON.stringify(sanitizeMetadata(pair.metadata, pair.sourceUrl || tab.url || '')));
+
+  const response = await fetchWithTimeout(`${settings.apiBaseUrl}/api/v1/debug/pages`, {
+    method: 'POST',
+    headers: authHeaders(settings),
+    body: form,
+  }, TIMING.submitTimeoutMs);
+  const text = await response.text();
+  if (response.status !== 201) throw new Error(`debug upload failed: HTTP ${response.status} ${text}`);
+  const manifest = JSON.parse(text);
+  await recordEvent({ site, level: 'info', message: `Uploaded debug pair ${manifest.id || ''}`.trim() });
+  return { ok: true, site, pageId: pair.pageId, debugId: manifest.id, manifest, url: manifest.id ? `/api/v1/debug/pages/${manifest.id}` : '' };
+}
+
+function assertImageDataUrl(dataUrl, label) {
+  const value = String(dataUrl || '');
+  if (!value.startsWith('data:image/png;base64,') && !value.startsWith('data:image/jpeg;base64,') && !value.startsWith('data:image/webp;base64,')) {
+    throw new Error(`${label} debug image must be a PNG, JPEG, or WebP data URL`);
+  }
+  if (value.length > SIZE_LIMITS.maxCaptureDataUrlChars) throw new Error(`${label} debug image is too large`);
+  return value;
 }
 
 async function reportEvent(message, sender) {

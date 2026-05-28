@@ -135,32 +135,19 @@ async function forceReprocessCurrent() {
 
 async function exportDebugImages() {
   try {
-    setStatus('Requesting debug images from active tab…');
-    const response = await sendMessage({ type: 'RUN_ACTIVE_TAB_ACTION', action: 'export-debug-pair' });
+    const saved = await saveSettings({ force: false });
+    if (!saved) return;
+    setStatus('Uploading debug pages from active tab…');
+    const response = await sendMessage({ type: 'RUN_ACTIVE_TAB_ACTION', action: 'upload-debug-pair' });
     if (!response.ok) {
-      setStatus(response.error || 'Debug images unavailable.', 'error');
+      setStatus(response.error || 'Debug upload failed.', 'error');
       return;
     }
-    const site = safeFilenamePart(response.site || 'page');
-    const page = safeFilenamePart(response.pageId || response.page || 'current');
-    downloadDataUrl(response.originalDataUrl, `frank-yomik-${site}-${page}-original.png`);
-    downloadDataUrl(response.translatedDataUrl, `frank-yomik-${site}-${page}-translated.png`);
-    setStatus('Debug images exported.', 'ok');
+    const latest = response.manifest?.id ? `/api/v1/debug/pages/${response.manifest.id}` : (response.url || '');
+    setStatus(`Debug pages uploaded: ${response.debugId || response.manifest?.id || 'ok'}${latest ? ` (${latest})` : ''}`, 'ok');
   } catch (error) {
     setStatus(error.message || String(error), 'error');
   }
-}
-
-function downloadDataUrl(dataUrl, filename) {
-  if (!String(dataUrl || '').startsWith('data:image/')) throw new Error(`Invalid debug image: ${filename}`);
-  const link = document.createElement('a');
-  link.href = dataUrl;
-  link.download = filename;
-  link.click();
-}
-
-function safeFilenamePart(value) {
-  return String(value || 'page').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'page';
 }
 
 function applySettings(settings) {

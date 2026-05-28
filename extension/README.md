@@ -15,7 +15,7 @@ The popup configures the self-hosted API URL, bearer token, enabled sites, manga
 The popup has two manual controls for bug reports and cache misses:
 
 - **Force reprocess current page**: resubmits the visible Kindle/Naver image with `force=true`, bypassing both the extension image cache and the server cache.
-- **Export debug images**: downloads the current original and translated page images as two PNG files so they can be compared side by side.
+- **Send debug pages to server**: uploads the current original and translated page images to the server for later comparison. Recent uploads can be listed with `GET /api/v1/debug/pages`.
 
 An optional command named **Force reprocess the current Frank Yomik page** is registered for `chrome://extensions/shortcuts`, but it has no default key binding. This avoids clashes with Chrome, Google apps, and site shortcuts.
 

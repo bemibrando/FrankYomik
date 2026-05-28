@@ -32,9 +32,10 @@ type Server struct {
 	rdb     *redis.Client
 
 	// Configurable limits (set from env vars in main.go)
-	maxImageSize     int64 // max upload size in bytes (default: 20 << 20)
-	streamMaxLenHigh int64 // XADD MAXLEN for high-priority stream
-	streamMaxLenLow  int64 // XADD MAXLEN for low-priority stream
+	maxImageSize       int64 // max upload size in bytes (default: 20 << 20)
+	maxDebugUploadSize int64 // max debug pair upload size in bytes (default: 50 << 20)
+	streamMaxLenHigh   int64 // XADD MAXLEN for high-priority stream
+	streamMaxLenLow    int64 // XADD MAXLEN for low-priority stream
 
 	// WebSocket subscriptions
 	mu          sync.Mutex
@@ -48,12 +49,13 @@ func NewServer(rdb *redis.Client, cacheDir string) *Server {
 		log.Printf("WARN: failed to prepare cache v2 directories: %v", err)
 	}
 	return &Server{
-		queue:        NewQueue(rdb),
-		results:      NewResults(rdb),
-		cache:        cache,
-		rdb:          rdb,
-		maxImageSize: 20 << 20, // 20 MiB default
-		subscribers:  make(map[string]map[chan WSNotification]struct{}),
+		queue:              NewQueue(rdb),
+		results:            NewResults(rdb),
+		cache:              cache,
+		rdb:                rdb,
+		maxImageSize:       20 << 20, // 20 MiB default
+		maxDebugUploadSize: 50 << 20, // 50 MiB default
+		subscribers:        make(map[string]map[chan WSNotification]struct{}),
 	}
 }
 
@@ -68,6 +70,10 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/cache/by-hash/{pipeline}/{source_hash}/image", s.handleCacheImageByHash)
 	mux.HandleFunc("GET /api/v1/cache/by-hash/{pipeline}/{source_hash}/meta", s.handleCacheMetaByHash)
 	mux.HandleFunc("PATCH /api/v1/cache/by-hash/{pipeline}/{source_hash}/meta", s.handlePatchCacheMetaByHash)
+	mux.HandleFunc("POST /api/v1/debug/pages", s.handleCreateDebugPage)
+	mux.HandleFunc("GET /api/v1/debug/pages", s.handleListDebugPages)
+	mux.HandleFunc("GET /api/v1/debug/pages/{id}", s.handleGetDebugPage)
+	mux.HandleFunc("GET /api/v1/debug/pages/{id}/{kind}", s.handleGetDebugPageImage)
 	mux.HandleFunc("GET /api/v1/health", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/ws", s.handleWebSocket)
 }
