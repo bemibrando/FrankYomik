@@ -43,7 +43,11 @@ _NO_MASK_FALLBACK_MIN_PAD_Y = 8
 # narration banners) so vertical text doesn't get anchored onto dark artwork.
 # Trigger only when the bright region fills less than this fraction of the bbox.
 _NO_MASK_TIGHTEN_MAX_FILL = 0.80
-_NO_MASK_TIGHTEN_MIN_AREA_RATIO = 0.10
+# Absolute minimum area for the dominant bright component before we trust it as
+# a real plate. Smaller than this we treat as detector noise (specular reflections,
+# stray bright specks) and skip tightening. A real title/narration plate is at
+# least ~30x15 pixels.
+_NO_MASK_TIGHTEN_MIN_AREA_PX = 400
 _FURIGANA_EXPANDED_MAX_FONT_RATIO = 1.15
 _FURIGANA_EXPANDED_MAX_FONT_EXTRA = 4
 _FURIGANA_SOURCE_MAX_FONT_RATIO = 1.15
@@ -1153,7 +1157,9 @@ def _tighten_no_mask_bbox_to_bright_region(
     if not np.any(bright):
         return bbox
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    # Bridge dark text strokes on the plate so the plate registers as one
+    # connected bright region (3x3 was too small for typical kanji stroke widths).
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11))
     bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, kernel, iterations=1)
 
     n_labels, _, stats, _ = cv2.connectedComponentsWithStats(bright, 8)
@@ -1167,7 +1173,7 @@ def _tighten_no_mask_bbox_to_bright_region(
 
     if best_area >= bbox_area * _NO_MASK_TIGHTEN_MAX_FILL:
         return bbox
-    if best_area < bbox_area * _NO_MASK_TIGHTEN_MIN_AREA_RATIO:
+    if best_area < _NO_MASK_TIGHTEN_MIN_AREA_PX:
         return bbox
 
     rx = int(stats[best_idx, cv2.CC_STAT_LEFT])
