@@ -4,6 +4,10 @@ Manifest V3 extension for using a self-hosted Frank Yomik server from desktop Ch
 
 The extension intentionally keeps Kindle and Naver pages close to vanilla: it does not add in-page buttons, panels, HUDs, or settings overlays. Controls live in the extension popup/options page. Content scripts only detect/capture page images and replace the page image after a translated result is ready.
 
+![Frank Yomik extension popup on Amazon Manga](docs/chromium-extension-popup.png)
+
+The popup configures the self-hosted API URL, bearer token, enabled sites, manga pipeline, target language, and webtoon prefetch behavior. Settings autosave when you leave a field or change a checkbox/select; **Save now** is retained as a fallback and to trigger browser permission prompts when needed.
+
 ![Kindle page translated by the Chromium extension](docs/kindle-extension-translation.png)
 
 ## Supported sites
@@ -15,7 +19,36 @@ The extension intentionally keeps Kindle and Naver pages close to vanilla: it do
   - `https://comic.naver.com/*`
   - `https://m.comic.naver.com/*`
 
-## Load unpacked
+## Install from a GitHub release
+
+Use this path when you only want to install the extension, not develop it.
+
+1. Open the [latest Frank Yomik release](https://github.com/akitaonrails/FrankYomik/releases/latest).
+2. Download the extension zip asset, currently named `frank-yomik-extension-0.1.0.zip`.
+3. Unzip it into a permanent folder, for example:
+   - Linux: `~/Applications/frank-yomik-extension/`
+   - macOS: `~/Applications/Frank Yomik Extension/`
+   - Windows: `C:\Users\<you>\Apps\frank-yomik-extension\`
+4. Open your browser's extensions page:
+   - Chrome/Chromium/Brave: `chrome://extensions`
+   - Edge: `edge://extensions`
+5. Enable **Developer mode**.
+6. Click **Load unpacked**.
+7. Select the extracted folder that contains `manifest.json`.
+8. Pin/open the **Frank Yomik** extension action.
+9. Set:
+   - API base URL, for example `https://frank.example.net` or a trusted-LAN URL.
+   - auth token matching server `AUTH_TOKEN`.
+   - enabled sites, manga pipeline, target language, and webtoon prefetch settings.
+10. Leave each field or click **Save now** to save, then allow the exact API-origin permission when Chromium asks.
+11. Click **Check server**.
+12. Reload any Kindle/Naver tabs that were already open before installing or updating the extension.
+
+To update later, download the newer release zip, replace the extracted folder contents, then click the reload button on the extension card. Removing and re-adding the extension can clear Chromium extension storage, so use **Export settings** first if you want a backup of the API URL/token.
+
+## Load unpacked from source
+
+Use this path while developing from a local clone.
 
 1. Open `chrome://extensions` or `edge://extensions`.
 2. Enable **Developer mode**.
@@ -30,7 +63,7 @@ The extension intentionally keeps Kindle and Naver pages close to vanilla: it do
 8. Click **Check server**.
 9. Reload any Kindle/Naver tabs that were already open before installing or updating the extension.
 
-For normal development updates, use the reload button on the existing extension card. Removing and re-adding the unpacked extension can clear Chromium extension storage. Use **Export settings** first if you want a backup of the API URL/token.
+For normal development updates, use the reload button on the existing extension card.
 
 ## Packaged zip
 
@@ -41,7 +74,7 @@ cd extension
 npm run package
 ```
 
-The output lands in `extension/dist/frank-yomik-extension-<version>.zip`. Unzip it into a dedicated directory, then load that directory from `chrome://extensions` with Developer mode enabled.
+The output lands in `extension/dist/frank-yomik-extension-<version>.zip`. Unzip it into a dedicated directory, then load that directory from `chrome://extensions` with Developer mode enabled. `extension/dist/` is ignored by git.
 
 ## Development checks
 

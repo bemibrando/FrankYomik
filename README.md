@@ -19,7 +19,8 @@ Automatic manga and webtoon translation system. Detects speech bubbles with RT-D
 |-----------|----------|-------------|
 | `server/` | Go + Python | API server, processing pipelines (manga + webtoon), Redis worker |
 | `client/` | Dart/Flutter | Android + Linux reader app with WebView overlay |
-| `docs/` | — | Test images, deployment notes |
+| `extension/` | JavaScript | Chromium MV3 extension for desktop Kindle/Naver reading |
+| `docs/` | — | Test images, screenshots, deployment notes |
 
 ## How It Works
 
@@ -37,6 +38,13 @@ Image → EasyOCR text detection → cluster into bubbles → Ollama translation
 **Web service**: Go API accepts images over HTTP, deduplicates via SHA256, queues through Redis Streams with priority ordering. Python workers process jobs and push results via Redis Pub/Sub + WebSocket.
 
 **Flutter client**: Wraps Kindle (read.amazon.co.jp) and Naver Webtoon in a WebView, captures pages, submits them to the API, and overlays translated images in real-time. Supports auto-translate or manual translate-on-demand, per-volume pipeline selection (furigana vs English), and local SQLite caching.
+
+**Chromium extension**: Runs on desktop Chrome/Chromium, Brave, and Edge. It keeps Kindle and Naver pages visually close to stock: the content script detects the current page image, sends it to your self-hosted server, then swaps in the completed translated/furigana image. All settings live in the extension popup; the bearer token stays in the extension service worker and is never exposed to page scripts.
+
+<p align="center">
+  <img src="extension/docs/chromium-extension-popup.png" width="80%" alt="Frank Yomik Chromium extension popup on Amazon Manga">
+</p>
+<p align="center"><em>Desktop extension configured for a self-hosted server, with Kindle manga running behind it.</em></p>
 
 ## Requirements
 
@@ -203,6 +211,34 @@ flutter build apk --release
 ```
 
 The client defaults to `http://localhost:8080`. Configure the server URL and auth token in the Settings screen.
+
+## Chromium Extension
+
+The desktop extension is the lightest way to use Frank Yomik directly on the Kindle Japan reader and Naver Webtoon sites. It supports:
+
+- Kindle Japan: `read.amazon.co.jp`, `read.kindle.co.jp`
+- Naver Webtoon: `comic.naver.com`, `m.comic.naver.com`
+- Manga pipelines: English translation or furigana annotations
+- Webtoon pipeline: Korean → English
+- Per-site enable/disable, target-language selection, and webtoon prefetch settings
+
+### Manual install from a GitHub release
+
+The extension is distributed as a zip asset on the [latest release](https://github.com/akitaonrails/FrankYomik/releases/latest). Chromium does not install this zip directly; load the extracted folder as an unpacked extension:
+
+1. Download `frank-yomik-extension-0.1.0.zip` from the latest release assets.
+2. Unzip it into a permanent folder, for example `~/Applications/frank-yomik-extension/`. Do not delete this folder after loading it.
+3. Open your browser's extension page:
+   - Chrome/Chromium/Brave: `chrome://extensions`
+   - Edge: `edge://extensions`
+4. Enable **Developer mode**.
+5. Click **Load unpacked** and select the extracted folder that contains `manifest.json`.
+6. Pin/open the **Frank Yomik** extension action.
+7. Set the API base URL, auth token, sites, manga pipeline, and target language. Settings autosave when you leave a field; **Save now** is available as a fallback and may trigger the exact API-origin permission prompt.
+8. Click **Check server**.
+9. Reload any Kindle/Naver tabs that were already open.
+
+To update, download the newer release zip, replace the extracted folder contents, then click the reload button on the extension card in `chrome://extensions`. If you remove and re-add the extension, export settings first because Chromium may clear extension storage.
 
 ### Versioning
 
