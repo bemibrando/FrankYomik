@@ -38,6 +38,12 @@ _NO_MASK_FALLBACK_MAX_PAD_X = 16
 _NO_MASK_FALLBACK_MAX_PAD_Y = 24
 _NO_MASK_FALLBACK_MIN_PAD_X = 6
 _NO_MASK_FALLBACK_MIN_PAD_Y = 8
+# No-mask tightening: shrink the bbox to the dominant bright component when
+# RT-DETR's detection extends past the visible plate (chapter title plates,
+# narration banners) so vertical text doesn't get anchored onto dark artwork.
+# Trigger only when the bright region fills less than this fraction of the bbox.
+_NO_MASK_TIGHTEN_MAX_FILL = 0.80
+_NO_MASK_TIGHTEN_MIN_AREA_RATIO = 0.10
 _FURIGANA_EXPANDED_MAX_FONT_RATIO = 1.15
 _FURIGANA_EXPANDED_MAX_FONT_EXTRA = 4
 _FURIGANA_SOURCE_MAX_FONT_RATIO = 1.15
@@ -609,6 +615,11 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
             bbox,
             min_extra_row_height=_vertical_main_char_height(initial_font_size),
         )
+        # Trim to the bright plate when the detection bleeds onto dark artwork.
+        bbox = _tighten_no_mask_bbox_to_bright_region(
+            layout_img if layout_img is not None else img,
+            bbox,
+        )
         x1, y1, x2, y2 = bbox
         bw = x2 - x1 - 2 * TEXT_MARGIN
         bh = y2 - y1 - 2 * TEXT_MARGIN
@@ -1111,6 +1122,63 @@ def _expand_limited_no_mask_bbox(
         min(img_w, x2 + pad_x),
         min(img_h, y2 + pad_y),
     )
+
+
+def _tighten_no_mask_bbox_to_bright_region(
+    img: Image.Image,
+    bbox: tuple[int, int, int, int],
+) -> tuple[int, int, int, int]:
+    """Shrink a no-mask bbox to the dominant bright component inside it.
+
+    RT-DETR sometimes returns a bbox that extends past the visible plate
+    (e.g. a chapter title strip whose detection bleeds onto the surrounding
+    dark artwork).  Without a bubble mask, the vertical furigana renderer
+    will pin its rightmost column to the bbox's right edge — which lands on
+    artwork rather than on the white plate.  This trims back to the largest
+    bright connected region so the renderer stays on the plate.
+
+    Returns the original bbox when the bright region already fills the bbox
+    (well-fitted balloon interiors) or when no usable bright region exists.
+    """
+    import cv2
+
+    img_w, img_h = img.size
+    x1, y1, x2, y2 = _clamp_bbox(bbox, img_w, img_h)
+    bw_b, bh_b = x2 - x1, y2 - y1
+    if bw_b < 8 or bh_b < 8:
+        return bbox
+
+    gray = np.array(img.crop((x1, y1, x2, y2)).convert("L"))
+    bright = (gray >= _BRIGHT_REGION_THRESHOLD).astype(np.uint8)
+    if not np.any(bright):
+        return bbox
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    bright = cv2.morphologyEx(bright, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+    n_labels, _, stats, _ = cv2.connectedComponentsWithStats(bright, 8)
+    if n_labels <= 1:
+        return bbox
+
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    best_idx = int(np.argmax(areas)) + 1
+    best_area = int(stats[best_idx, cv2.CC_STAT_AREA])
+    bbox_area = bw_b * bh_b
+
+    if best_area >= bbox_area * _NO_MASK_TIGHTEN_MAX_FILL:
+        return bbox
+    if best_area < bbox_area * _NO_MASK_TIGHTEN_MIN_AREA_RATIO:
+        return bbox
+
+    rx = int(stats[best_idx, cv2.CC_STAT_LEFT])
+    ry = int(stats[best_idx, cv2.CC_STAT_TOP])
+    rw = int(stats[best_idx, cv2.CC_STAT_WIDTH])
+    rh = int(stats[best_idx, cv2.CC_STAT_HEIGHT])
+
+    if rw < 10 or rh < 10:
+        return bbox
+
+    return (x1 + rx, y1 + ry, x1 + rx + rw, y1 + ry + rh)
 
 
 def _expand_bright_region_bbox(img: Image.Image,

@@ -19,6 +19,7 @@ from kindle.text_renderer import (
     _expand_bright_region_bbox,
     _expand_limited_no_mask_bbox,
     _no_mask_furigana_layout_bbox,
+    _tighten_no_mask_bbox_to_bright_region,
     _mask_safe_bbox,
     _vertical_furigana_char_height,
     _vertical_main_char_height,
@@ -344,6 +345,36 @@ class TestBrightRegionExpansion:
             bbox,
             min_extra_row_height=40,
         ) == bbox
+
+    def test_tighten_shrinks_bbox_extending_past_bright_plate(self):
+        # White plate occupies 30..90 horizontally, 40..70 vertically.
+        # bbox is wider than the plate, bleeding onto dark background.
+        img = Image.new("RGB", (200, 120), (40, 40, 40))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((30, 40, 90, 70), fill=(245, 245, 245))
+        bbox = (20, 35, 140, 75)
+
+        tightened = _tighten_no_mask_bbox_to_bright_region(img, bbox)
+
+        assert tightened[0] >= 25  # left edge moved toward the plate
+        assert tightened[2] <= 95  # right edge no longer past the plate
+        assert tightened[0] < tightened[2]
+        assert tightened[1] < tightened[3]
+
+    def test_tighten_leaves_well_fitted_bbox_alone(self):
+        # bbox already matches the bright plate — nothing to tighten.
+        img = Image.new("RGB", (160, 120), (40, 40, 40))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((30, 40, 130, 100), fill=(245, 245, 245))
+        bbox = (30, 40, 130, 100)
+
+        assert _tighten_no_mask_bbox_to_bright_region(img, bbox) == bbox
+
+    def test_tighten_leaves_bbox_with_no_bright_region(self):
+        img = Image.new("RGB", (120, 120), (40, 40, 40))
+        bbox = (10, 10, 90, 90)
+
+        assert _tighten_no_mask_bbox_to_bright_region(img, bbox) == bbox
 
     def test_rejects_normal_balloons_with_other_text_in_border_space(self):
         img = Image.new("RGB", (220, 220), (90, 90, 90))
