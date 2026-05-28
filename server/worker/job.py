@@ -320,11 +320,14 @@ def _rerender_from_metadata(job: ProcessingJob,
             clear_text_strokes(img_out, item["bbox"], mask=item["mask"])
 
     # Pass 2: Render
-    page_font_cap, source_outlier_threshold = compute_furigana_page_font_limits([
-        int(item["source_font_size"])
-        for item in render_items
-        if item["mode"] == "furigana" and item.get("source_font_size") is not None
-    ])
+    page_font_cap, source_outlier_threshold, page_font_floor = (
+        compute_furigana_page_font_limits([
+            int(item["source_font_size"])
+            for item in render_items
+            if item["mode"] == "furigana"
+            and item.get("source_font_size") is not None
+        ])
+    )
     applied = 0
     for item in render_items:
         if item["mode"] == "furigana":
@@ -332,7 +335,8 @@ def _rerender_from_metadata(job: ProcessingJob,
                                      mask=item["mask"],
                                      source_font_size=item.get("source_font_size"),
                                      page_font_cap=page_font_cap,
-                                     source_outlier_threshold=source_outlier_threshold)
+                                     source_outlier_threshold=source_outlier_threshold,
+                                     page_font_floor=page_font_floor)
         else:
             render_english(img_out, item["bbox"], item["value"],
                            base_font_size=base_font_size, mask=item["mask"])

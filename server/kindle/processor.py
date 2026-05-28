@@ -235,8 +235,9 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
 
     page_font_cap = None
     source_outlier_threshold = None
+    page_font_floor = None
     if mode == PipelineMode.FURIGANA:
-        page_font_cap, source_outlier_threshold = (
+        page_font_cap, source_outlier_threshold, page_font_floor = (
             _estimate_furigana_source_font_sizes(page)
         )
 
@@ -268,7 +269,8 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
                                      mask=br.mask,
                                      source_font_size=br.source_font_size,
                                      page_font_cap=page_font_cap,
-                                     source_outlier_threshold=source_outlier_threshold)
+                                     source_outlier_threshold=source_outlier_threshold,
+                                     page_font_floor=page_font_floor)
         else:
             size = font_sizes.get(i, base_font_size)
             render_english(page.output_img, br.bbox, br.transformed,
@@ -306,8 +308,9 @@ def render_page_to_bytes(page: PageResult, mode: PipelineMode,
     # Two-pass rendering (same as render_page)
     page_font_cap = None
     source_outlier_threshold = None
+    page_font_floor = None
     if mode == PipelineMode.FURIGANA:
-        page_font_cap, source_outlier_threshold = (
+        page_font_cap, source_outlier_threshold, page_font_floor = (
             _estimate_furigana_source_font_sizes(page)
         )
 
@@ -337,7 +340,8 @@ def render_page_to_bytes(page: PageResult, mode: PipelineMode,
                                      mask=br.mask,
                                      source_font_size=br.source_font_size,
                                      page_font_cap=page_font_cap,
-                                     source_outlier_threshold=source_outlier_threshold)
+                                     source_outlier_threshold=source_outlier_threshold,
+                                     page_font_floor=page_font_floor)
         else:
             size = font_sizes.get(i, base_font_size)
             render_english(page.output_img, br.bbox, br.transformed,
@@ -346,7 +350,9 @@ def render_page_to_bytes(page: PageResult, mode: PipelineMode,
     return encode_image_pil(page.output_img)
 
 
-def _estimate_furigana_source_font_sizes(page: PageResult) -> tuple[int | None, int | None]:
+def _estimate_furigana_source_font_sizes(
+    page: PageResult,
+) -> tuple[int | None, int | None, int | None]:
     """Estimate each furigana region's original glyph size before clearing."""
     source_sizes: list[int] = []
     for br in page.bubble_results:

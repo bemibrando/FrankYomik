@@ -9,6 +9,7 @@ from kindle.text_renderer import (
     _choose_layout,
     _cap_expanded_furigana_font_size,
     _cap_furigana_to_source_scale,
+    _floor_furigana_to_page_dialogue_scale,
     compute_furigana_page_font_limits,
     estimate_source_vertical_font_size,
     _furigana_font_size,
@@ -81,6 +82,8 @@ class TestFuriganaSizing:
 
     def test_furigana_size_keeps_minimum(self):
         assert _furigana_font_size(12) == 10
+        assert _furigana_font_size(17) == 10
+        assert _furigana_font_size(18) == 12
 
     def test_fit_uses_rendered_width_without_extra_furigana_reserve(self):
         chars = [{"char": "今", "furigana": "きょう"} for _ in range(8)]
@@ -119,11 +122,52 @@ class TestFuriganaSizing:
         assert _cap_furigana_to_source_scale(60, 20) == 23
         assert _cap_furigana_to_source_scale(18, 20) == 18
 
-    def test_page_font_limits_cap_normal_dialogue_but_preserve_outliers(self):
-        cap, outlier = compute_furigana_page_font_limits([20, 21, 22, 30, 45])
+    def test_page_font_limits_bound_normal_dialogue_but_preserve_outliers(self):
+        cap, outlier, floor = compute_furigana_page_font_limits([
+            20, 21, 22, 30, 45,
+        ])
 
         assert cap == 26
         assert outlier == 34
+        assert floor == 19
+
+    def test_page_floor_raises_normal_dialogue_when_it_fits(self):
+        assert _floor_furigana_to_page_dialogue_scale(
+            20,
+            geometric_font_size=30,
+            source_font_size=21,
+            page_font_floor=24,
+            source_outlier_threshold=34,
+            char_count=12,
+        ) == 24
+
+    def test_page_floor_never_exceeds_geometric_fit(self):
+        assert _floor_furigana_to_page_dialogue_scale(
+            20,
+            geometric_font_size=22,
+            source_font_size=21,
+            page_font_floor=24,
+            source_outlier_threshold=34,
+            char_count=12,
+        ) == 22
+
+    def test_page_floor_preserves_large_and_short_outliers(self):
+        assert _floor_furigana_to_page_dialogue_scale(
+            20,
+            geometric_font_size=30,
+            source_font_size=35,
+            page_font_floor=24,
+            source_outlier_threshold=34,
+            char_count=12,
+        ) == 20
+        assert _floor_furigana_to_page_dialogue_scale(
+            20,
+            geometric_font_size=30,
+            source_font_size=21,
+            page_font_floor=24,
+            source_outlier_threshold=34,
+            char_count=3,
+        ) == 20
 
     def test_estimates_small_source_text_in_large_bubble(self):
         img = Image.new("RGB", (160, 220), "white")

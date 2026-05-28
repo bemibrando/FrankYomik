@@ -690,6 +690,7 @@ class TestRerenderFromMetadata:
         for call_args in mock_render.call_args_list:
             assert call_args.kwargs["page_font_cap"] == 26
             assert call_args.kwargs["source_outlier_threshold"] == 34
+            assert call_args.kwargs["page_font_floor"] == 19
 
 
 # --- Parallel translation ---

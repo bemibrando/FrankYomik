@@ -40,8 +40,13 @@ _FURIGANA_SOURCE_MAX_FONT_RATIO = 1.15
 _FURIGANA_SOURCE_MAX_FONT_EXTRA = 4
 _FURIGANA_PAGE_NORMAL_CAP_RATIO = 1.20
 _FURIGANA_PAGE_NORMAL_CAP_EXTRA = 5
+_FURIGANA_PAGE_NORMAL_FLOOR_RATIO = 0.88
+_FURIGANA_PAGE_NORMAL_FLOOR_EXTRA = 4
 _FURIGANA_PAGE_OUTLIER_RATIO = 1.55
 _FURIGANA_PAGE_OUTLIER_EXTRA = 10
+_FURIGANA_PAGE_FLOOR_MIN_CHARS = 6
+_FURIGANA_READABLE_MIN_SIZE = 12
+_FURIGANA_READABLE_MAIN_THRESHOLD = 18
 _SOURCE_FONT_MAX_DARK_DENSITY = 0.35
 _SOURCE_FONT_MIN_DARK_PIXELS = 12
 
@@ -548,7 +553,8 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
                              mask: 'np.ndarray | None' = None,
                              source_font_size: int | None = None,
                              page_font_cap: int | None = None,
-                             source_outlier_threshold: int | None = None) -> None:
+                             source_outlier_threshold: int | None = None,
+                             page_font_floor: int | None = None) -> None:
     """Render vertical Japanese text with furigana inside a bubble region.
 
     When `mask` is provided, the bbox is first tightened to the mask's
@@ -602,7 +608,8 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
         if bw < 10 or bh < 10:
             return
 
-    font_size = _fit_vertical_font_size(chars, bw, bh)
+    geometric_font_size = _fit_vertical_font_size(chars, bw, bh)
+    font_size = geometric_font_size
     if original_font_size is not None:
         font_size = _cap_expanded_furigana_font_size(
             font_size,
@@ -615,6 +622,14 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
         source_font_size=source_font_size,
         page_font_cap=page_font_cap,
         source_outlier_threshold=source_outlier_threshold,
+    )
+    font_size = _floor_furigana_to_page_dialogue_scale(
+        font_size,
+        geometric_font_size=geometric_font_size,
+        source_font_size=source_font_size,
+        page_font_floor=page_font_floor,
+        source_outlier_threshold=source_outlier_threshold,
+        char_count=len(chars),
     )
     furi_size = _furigana_font_size(font_size)
 
@@ -777,7 +792,10 @@ def _fit_vertical_font_size(chars: list[dict], bw: int, bh: int) -> int:
 
 def _furigana_font_size(font_size: int) -> int:
     """Return furigana font size for a fitted main Japanese font size."""
-    return max(MIN_FONT_SIZE, int(font_size * FURIGANA_SIZE_RATIO))
+    ratio_size = int(font_size * FURIGANA_SIZE_RATIO)
+    if font_size >= _FURIGANA_READABLE_MAIN_THRESHOLD:
+        return max(_FURIGANA_READABLE_MIN_SIZE, ratio_size)
+    return max(MIN_FONT_SIZE, ratio_size)
 
 
 def _cap_expanded_furigana_font_size(fitted_size: int,
@@ -811,28 +829,37 @@ def _cap_furigana_to_source_scale(fitted_size: int, source_size: int) -> int:
 
 def compute_furigana_page_font_limits(
     source_sizes: list[int],
-) -> tuple[int | None, int | None]:
-    """Compute soft page caps for normal dialogue without flattening SFX.
+) -> tuple[int | None, int | None, int | None]:
+    """Compute soft page limits for normal dialogue without flattening SFX.
 
     Most manga dialogue on one page uses a narrow source glyph-size band.  Use
-    the robust median to prevent normal bubbles from drifting wildly, but keep
-    source-size outliers (large shouts/SFX/captions) eligible for larger text.
+    the robust median to prevent normal bubbles from drifting wildly.  Keep
+    source-size outliers (large shouts/SFX/captions) eligible for larger text,
+    while giving long normal-dialogue bubbles a readability floor.
     """
     clean = sorted(size for size in source_sizes if size and size > 0)
     if len(clean) < 3:
-        return None, None
+        return None, None, None
     median = int(np.median(clean))
     if median <= 0:
-        return None, None
+        return None, None, None
     normal_cap = min(
         int(round(median * _FURIGANA_PAGE_NORMAL_CAP_RATIO)),
         median + _FURIGANA_PAGE_NORMAL_CAP_EXTRA,
+    )
+    normal_floor = max(
+        int(round(median * _FURIGANA_PAGE_NORMAL_FLOOR_RATIO)),
+        median - _FURIGANA_PAGE_NORMAL_FLOOR_EXTRA,
     )
     outlier_threshold = max(
         int(round(median * _FURIGANA_PAGE_OUTLIER_RATIO)),
         median + _FURIGANA_PAGE_OUTLIER_EXTRA,
     )
-    return max(MIN_FONT_SIZE, normal_cap), max(MIN_FONT_SIZE, outlier_threshold)
+    return (
+        max(MIN_FONT_SIZE, normal_cap),
+        max(MIN_FONT_SIZE, outlier_threshold),
+        max(MIN_FONT_SIZE, normal_floor),
+    )
 
 
 def _cap_furigana_to_page_dialogue_scale(
@@ -848,6 +875,27 @@ def _cap_furigana_to_page_dialogue_scale(
         if source_font_size >= source_outlier_threshold:
             return fitted_size
     return max(MIN_FONT_SIZE, min(fitted_size, page_font_cap))
+
+
+def _floor_furigana_to_page_dialogue_scale(
+    font_size: int,
+    *,
+    geometric_font_size: int,
+    source_font_size: int | None,
+    page_font_floor: int | None,
+    source_outlier_threshold: int | None,
+    char_count: int,
+) -> int:
+    """Raise long normal dialogue toward the page scale when it still fits."""
+    if page_font_floor is None:
+        return font_size
+    if char_count < _FURIGANA_PAGE_FLOOR_MIN_CHARS:
+        return font_size
+    if source_font_size is not None and source_outlier_threshold is not None:
+        if source_font_size >= source_outlier_threshold:
+            return font_size
+    floor_target = min(geometric_font_size, page_font_floor)
+    return max(MIN_FONT_SIZE, max(font_size, floor_target))
 
 
 def estimate_source_vertical_font_size(
