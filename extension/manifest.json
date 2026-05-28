@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Frank Yomik",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Translate Kindle and Naver Webtoon pages through a self-hosted Frank Yomik server.",
   "icons": {
     "16": "assets/icons/icon-16.png",
@@ -24,6 +24,11 @@
     "alarms",
     "storage"
   ],
+  "commands": {
+    "force-reprocess-current": {
+      "description": "Force reprocess the current Frank Yomik page"
+    }
+  },
   "host_permissions": [
     "https://image-comic.pstatic.net/*",
     "https://webtoon-phinf.pstatic.net/*",

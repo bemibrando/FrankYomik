@@ -34,6 +34,7 @@
       return true;
     }
 
+    if (!target.dataset.frankOriginalSrc && target.src) target.dataset.frankOriginalSrc = capture.imgSrc || target.src;
     const blobUrl = await objectUrlFromDataUrl(result.imageDataUrl);
     target.src = blobUrl;
     target.dataset.frankTranslated = 'true';
@@ -95,6 +96,7 @@
     const capture = result.capture || {};
     const img = findWebtoonTarget(result.pageId, capture.originalSrc, capture.index);
     if (!img) return false;
+    if (!img.dataset.frankOriginalSrc && (capture.originalSrc || img.src)) img.dataset.frankOriginalSrc = capture.originalSrc || img.src;
     const blobUrl = await objectUrlFromDataUrl(result.imageDataUrl);
     img.src = blobUrl;
     img.dataset.frankTranslated = 'true';

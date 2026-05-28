@@ -46,6 +46,13 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
 });
 
+chrome.commands?.onCommand?.addListener((command) => {
+  if (command !== 'force-reprocess-current') return;
+  runActiveTabAction('force-reprocess')
+    .then(() => recordEvent({ site: 'extension', level: 'info', message: 'Shortcut forced current page reprocess' }))
+    .catch((error) => recordEvent({ site: 'extension', level: 'error', message: `Shortcut force reprocess failed: ${error.message || error}` }));
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   handleMessage(message, sender)
     .then(sendResponse)
@@ -83,9 +90,27 @@ async function handleMessage(message, sender) {
     case 'GET_DIAGNOSTICS':
       assertExtensionPage(sender, 'GET_DIAGNOSTICS');
       return { ok: true, diagnostics: await loadDiagnostics(), jobs: await loadActiveJobs() };
+    case 'RUN_ACTIVE_TAB_ACTION':
+      assertExtensionPage(sender, 'RUN_ACTIVE_TAB_ACTION');
+      return runActiveTabAction(message.action);
     default:
       throw new Error(`unknown message type: ${message.type}`);
   }
+}
+
+async function runActiveTabAction(action) {
+  const messageType = action === 'force-reprocess'
+    ? 'FRANK_FORCE_REPROCESS_CURRENT'
+    : action === 'export-debug-pair'
+      ? 'FRANK_EXPORT_DEBUG_PAIR'
+      : '';
+  if (!messageType) throw new Error('unknown active tab action');
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id) throw new Error('No active tab found.');
+  const response = await chrome.tabs.sendMessage(tab.id, { type: messageType });
+  if (!response?.ok) throw new Error(response?.error || 'Content script could not run the action.');
+  await recordEvent({ site: response.site || 'extension', level: 'info', message: `Active tab action completed: ${action}` });
+  return response;
 }
 
 async function getSettings() {
@@ -154,7 +179,7 @@ async function submitCapture(message, sender) {
   const targetLanguage = VALID_TARGET_LANGUAGES.has(settings.targetLanguage) ? settings.targetLanguage : 'en';
   const cachePipeline = targetLanguage === 'en' ? pipeline : `${pipeline}_${targetLanguage}`;
   const cacheKey = cacheKeyFor(settings.apiBaseUrl, cachePipeline, sourceHash);
-  const cachedDataUrl = await cacheGet(cacheKey);
+  const cachedDataUrl = message.force === true ? null : await cacheGet(cacheKey);
   if (cachedDataUrl) {
     return {
       ok: true,
@@ -177,7 +202,7 @@ async function submitCapture(message, sender) {
     priority,
     targetLanguage,
     metadata,
-    force: false,
+    force: message.force === true,
   });
 
   const jobId = String(response.job_id || '');

@@ -108,6 +108,7 @@ h2 {
   margin: 14px 0 8px;
 }
 
+.current-page,
 .diagnostics {
   border-top: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
   margin-top: 14px;

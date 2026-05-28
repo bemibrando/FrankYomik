@@ -16,6 +16,7 @@
   const MIN_VISIBLE_OVERLAP_PX2 = 2000;
   const LOADER_VISIBLE_OVERLAP_PX2 = 1600;
   const NO_TARGET_REPORT_INTERVAL_MS = 15000;
+  const MAX_DEBUG_ENTRIES = 20;
 
   let started = false;
   let settings = {};
@@ -32,6 +33,7 @@
   let lastNoTargetReportAt = 0;
   const processedBlobs = new Set();
   const spreadGroups = new Map();
+  const debugEntries = new Map();
 
   window.FrankKindle = { start };
 
@@ -75,9 +77,18 @@
       userNavAt = Date.now();
       window.setTimeout(detectPageChange, 1000);
     });
-    chrome.runtime.onMessage.addListener((message) => {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message?.type === 'FRANK_JOB_COMPLETE' && message.site === 'kindle') handleJobComplete(message);
       if (message?.type === 'FRANK_JOB_FAILED' && message.site === 'kindle') handleJobFailed(message);
+      if (message?.type === 'FRANK_FORCE_REPROCESS_CURRENT') {
+        forceReprocessCurrent().then(sendResponse).catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+        return true;
+      }
+      if (message?.type === 'FRANK_EXPORT_DEBUG_PAIR') {
+        exportDebugPair().then(sendResponse).catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+        return true;
+      }
+      return false;
     });
   }
 
@@ -156,19 +167,20 @@
     });
   }
 
-  async function submitDetection(detection) {
+  async function submitDetection(detection, force = false) {
     const target = findImageBySrc(detection.imgSrc) || findVisibleBlob();
     if (!target) return;
     processedBlobs.add(detection.imgSrc);
 
     try {
       if (detection.pageMode === 'spread') {
-        await submitSpread(target, detection);
+        await submitSpread(target, detection, force);
       } else {
         const imageDataUrl = captureImage(target, 'full');
         if (!imageDataUrl) throw new Error('Kindle capture failed');
+        rememberDebug(detection.pageId, { pageId: detection.pageId, site: 'kindle', pageMode: 'single', originalSrc: detection.imgSrc, originalDataUrl: imageDataUrl, capture: detection });
         report('info', `Captured Kindle page ${detection.index} (${formatBytes(imageDataUrl.length)})`);
-        const response = await submitCapture({ ...detection, pageMode: 'single' }, imageDataUrl, detection.pageId);
+        const response = await submitCapture({ ...detection, pageMode: 'single' }, imageDataUrl, detection.pageId, force);
         if (response.status === 'completed') await applyKindle(response);
       }
     } catch (error) {
@@ -179,10 +191,28 @@
     }
   }
 
-  async function submitSpread(target, detection) {
+  async function submitSpread(target, detection, force = false) {
     const left = captureImage(target, 'left');
     const right = captureImage(target, 'right');
+    const full = captureImage(target, 'full');
     if (!left || !right) throw new Error('Kindle spread capture failed');
+    await submitSpreadCaptures(detection, { left, right, full }, force);
+  }
+
+  async function submitSpreadCaptures(detection, captures, force = false) {
+    const { left, right, full } = captures;
+    if (!left || !right) throw new Error('Kindle spread capture failed');
+    if (full) {
+      rememberDebug(detection.pageId, {
+        pageId: detection.pageId,
+        site: 'kindle',
+        pageMode: 'spread',
+        originalSrc: detection.imgSrc,
+        originalDataUrl: full,
+        originalSides: { left, right },
+        capture: detection,
+      });
+    }
     report('info', `Captured Kindle spread halves (${formatBytes(left.length)} + ${formatBytes(right.length)})`);
 
     const group = {
@@ -195,13 +225,13 @@
 
     const leftId = `${detection.pageId}-left`;
     const rightId = `${detection.pageId}-right`;
-    const leftResponse = await submitCapture({ ...detection, groupId: detection.pageId, side: 'left' }, left, leftId);
-    const rightResponse = await submitCapture({ ...detection, groupId: detection.pageId, side: 'right' }, right, rightId);
+    const leftResponse = await submitCapture({ ...detection, groupId: detection.pageId, side: 'left' }, left, leftId, force);
+    const rightResponse = await submitCapture({ ...detection, groupId: detection.pageId, side: 'right' }, right, rightId, force);
     if (leftResponse.status === 'completed') await handleSpreadSide(leftResponse);
     if (rightResponse.status === 'completed') await handleSpreadSide(rightResponse);
   }
 
-  async function submitCapture(capture, imageDataUrl, pageId) {
+  async function submitCapture(capture, imageDataUrl, pageId, force = false) {
     const metadata = parseKindleMetadata(capture, pageId);
     const response = await chrome.runtime.sendMessage({
       type: 'SUBMIT_CAPTURE',
@@ -212,6 +242,7 @@
       metadata,
       capture,
       imageDataUrl,
+      force,
     });
     if (!response?.ok) throw new Error(response?.error || 'submit failed');
     report('info', `Kindle capture submitted: ${pageId} (${response.status || 'unknown'})`);
@@ -261,6 +292,7 @@
   async function applyKindle(message) {
     const ok = await window.FrankOverlay?.applyKindleResult(message);
     if (ok) {
+      rememberDebug(message.pageId, { pageId: message.pageId, site: 'kindle', translatedDataUrl: message.imageDataUrl, capture: message.capture });
       report('info', `Kindle translated image applied: ${message.pageId || 'unknown page'}`);
       for (const delay of REAPPLY_DELAYS_MS) {
         window.setTimeout(() => window.FrankOverlay?.applyKindleResult(message), delay);
@@ -268,6 +300,52 @@
     }
     if (!ok) report('error', `Kindle translated image was ready but could not be applied: ${message.pageId || 'unknown page'}`);
     return ok;
+  }
+
+  async function forceReprocessCurrent() {
+    if (!settings.configured || settings.kindleEnabled === false) throw new Error('Kindle support is not enabled or configured.');
+    const target = findVisibleKindleImage();
+    if (!target) throw new Error('No current Kindle page image found. Reload or turn the page and try again.');
+    const entry = debugEntryForImage(target);
+    let capture = entry?.capture || captureForTarget(target, entry?.pageId || `kindle-${sessionId}-manual-${Date.now()}`);
+    const pageId = `${capture.pageId || entry?.pageId || `kindle-${sessionId}-manual`}-force-${Date.now()}`;
+    capture = { ...capture, pageId };
+    if (capture.pageMode === 'spread') {
+      if (target.dataset.frankTranslated === 'true') {
+        const originalSides = entry?.originalSides || (entry?.originalDataUrl ? await splitSpreadDataUrl(entry.originalDataUrl) : null);
+        if (!originalSides?.left || !originalSides?.right) {
+          throw new Error('Original spread capture is unavailable for the translated page. Reload or turn the page to let Frank recapture the original, then try again.');
+        }
+        await submitSpreadCaptures(capture, { ...originalSides, full: entry?.originalDataUrl }, true);
+      } else {
+        await submitSpread(target, capture, true);
+      }
+      return { ok: true, site: 'kindle', pageId, message: 'Forced Kindle spread reprocess submitted.' };
+    }
+
+    let imageDataUrl = null;
+    if (target.dataset.frankTranslated === 'true') {
+      imageDataUrl = entry?.originalDataUrl || null;
+      if (!imageDataUrl) throw new Error('Original capture is unavailable for the translated page. Reload or turn the page to let Frank recapture the original, then try again.');
+    } else {
+      imageDataUrl = captureImage(target, 'full');
+    }
+    if (!imageDataUrl) throw new Error('Current Kindle page could not be captured.');
+    rememberDebug(pageId, { pageId, site: 'kindle', pageMode: capture.pageMode, originalSrc: capture.imgSrc, originalDataUrl: imageDataUrl, capture });
+    const response = await submitCapture(capture, imageDataUrl, pageId, true);
+    if (response.status === 'completed') await applyKindle(response);
+    return { ok: true, site: 'kindle', pageId, message: 'Forced Kindle reprocess submitted.' };
+  }
+
+  async function exportDebugPair() {
+    const target = findVisibleKindleImage();
+    if (!target) throw new Error('No current Kindle page image found.');
+    const entry = debugEntryForImage(target);
+    const originalDataUrl = entry?.originalDataUrl;
+    const translatedDataUrl = entry?.translatedDataUrl || (target.dataset.frankTranslated === 'true' ? await dataUrlFromSrc(target.src) : null);
+    if (!originalDataUrl) throw new Error('Original debug image unavailable. Reload or turn the page to let Frank recapture the original.');
+    if (!translatedDataUrl) throw new Error('Translated debug image unavailable for the current page.');
+    return { ok: true, site: 'kindle', pageId: entry?.pageId || target.dataset.frankPageId || 'current', originalDataUrl, translatedDataUrl };
   }
 
   function finishGroup() {
@@ -358,6 +436,97 @@
       }
     }
     return best;
+  }
+
+  function findVisibleKindleImage() {
+    const root = findReaderRoot();
+    let imgs = Array.from(root.querySelectorAll('img'));
+    if (!imgs.length) imgs = Array.from(document.querySelectorAll('img'));
+    let best = null;
+    let bestArea = 0;
+    for (const img of imgs) {
+      if (!img.src?.startsWith('blob:') && img.dataset.frankTranslated !== 'true') continue;
+      const rect = img.getBoundingClientRect();
+      if (rect.width < MIN_PAGE_SIDE_PX || rect.height < MIN_PAGE_SIDE_PX) continue;
+      const overlap = overlapAreaInViewport(rect, window.innerWidth, window.innerHeight);
+      if (overlap > bestArea) {
+        bestArea = overlap;
+        best = img;
+      }
+    }
+    return best;
+  }
+
+  function captureForTarget(target, pageId) {
+    const rect = target.getBoundingClientRect();
+    return {
+      pageId,
+      index: pageCounter || 0,
+      pageMode: rect.width > rect.height * SPREAD_THRESHOLD ? 'spread' : 'single',
+      navIntent,
+      imgSrc: target.dataset.frankOriginalSrc || target.src,
+      naturalWidth: target.naturalWidth,
+      naturalHeight: target.naturalHeight,
+      rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+      devicePixelRatio: window.devicePixelRatio || 1,
+      kindlePage: findKindlePage(),
+    };
+  }
+
+  function rememberDebug(key, value) {
+    if (!key) return;
+    const previous = debugEntries.get(key) || {};
+    const entry = { ...previous, ...value, pageId: value.pageId || previous.pageId || key, updatedAt: Date.now() };
+    debugEntries.set(key, entry);
+    if (entry.originalSrc) debugEntries.set(entry.originalSrc, entry);
+    while (debugEntries.size > MAX_DEBUG_ENTRIES * 2) {
+      const oldestKey = debugEntries.keys().next().value;
+      debugEntries.delete(oldestKey);
+    }
+  }
+
+  function debugEntryForImage(img) {
+    return debugEntries.get(img.dataset.frankPageId)
+      || debugEntries.get(img.dataset.frankOriginalSrc)
+      || debugEntries.get(img.src)
+      || null;
+  }
+
+  async function dataUrlFromSrc(src) {
+    if (!src) return null;
+    if (src.startsWith('data:image/')) return src;
+    const response = await fetch(src);
+    if (!response.ok) return null;
+    return blobToDataUrl(await response.blob());
+  }
+
+  async function splitSpreadDataUrl(dataUrl) {
+    const img = await loadImage(dataUrl);
+    const halfW = Math.floor(img.naturalWidth / 2);
+    if (halfW <= 0 || img.naturalHeight <= 0) return null;
+    return {
+      left: cropLoadedImage(img, 0, 0, halfW, img.naturalHeight),
+      right: cropLoadedImage(img, halfW, 0, img.naturalWidth - halfW, img.naturalHeight),
+    };
+  }
+
+  function cropLoadedImage(img, sx, sy, sw, sh) {
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, sw);
+    canvas.height = Math.max(1, sh);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    return canvas.toDataURL('image/png');
+  }
+
+  function blobToDataUrl(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error || new Error('failed to read image'));
+      reader.onload = () => resolve(String(reader.result));
+      reader.readAsDataURL(blob);
+    });
   }
 
   function findImageBySrc(src) {

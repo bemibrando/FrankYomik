@@ -27,6 +27,12 @@ function fail(message) {
 if (manifest.manifest_version !== 3) fail('manifest_version must be 3');
 if (!manifest.background?.service_worker) fail('background service_worker is required');
 if (manifest.background?.type !== 'module') fail('background service_worker should be a module');
+if (manifest.commands?.['force-reprocess-current']?.description !== 'Force reprocess the current Frank Yomik page') {
+  fail('force-reprocess-current command with description is required');
+}
+if (manifest.commands?.['force-reprocess-current']?.suggested_key) {
+  fail('force-reprocess-current must not define a default key binding');
+}
 if (!Array.isArray(manifest.content_scripts) || manifest.content_scripts.length !== 2) {
   fail('two scoped content script declarations are expected: Kindle and Naver Webtoon');
 }

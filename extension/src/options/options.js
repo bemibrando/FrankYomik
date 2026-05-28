@@ -47,6 +47,8 @@ document.querySelector('#health-check').addEventListener('click', async () => {
 
 document.querySelector('#refresh-diagnostics').addEventListener('click', refreshDiagnostics);
 document.querySelector('#export-settings').addEventListener('click', exportSettings);
+document.querySelector('#force-reprocess-current').addEventListener('click', forceReprocessCurrent);
+document.querySelector('#export-debug-images').addEventListener('click', exportDebugImages);
 document.querySelector('#import-settings').addEventListener('click', () => {
   document.querySelector('#import-settings-file').click();
 });
@@ -112,6 +114,53 @@ async function importSettingsFile(event) {
   } catch (error) {
     setStatus(`Import failed: ${error.message || error}`, 'error');
   }
+}
+
+async function forceReprocessCurrent() {
+  try {
+    const saved = await saveSettings({ force: false });
+    if (!saved) return;
+    setStatus('Requesting forced reprocess on active tab…');
+    const response = await sendMessage({ type: 'RUN_ACTIVE_TAB_ACTION', action: 'force-reprocess' });
+    if (!response.ok) {
+      setStatus(response.error || 'Force reprocess failed.', 'error');
+      return;
+    }
+    setStatus(response.message || 'Forced reprocess submitted.', 'ok');
+    await refreshDiagnostics();
+  } catch (error) {
+    setStatus(error.message || String(error), 'error');
+  }
+}
+
+async function exportDebugImages() {
+  try {
+    setStatus('Requesting debug images from active tab…');
+    const response = await sendMessage({ type: 'RUN_ACTIVE_TAB_ACTION', action: 'export-debug-pair' });
+    if (!response.ok) {
+      setStatus(response.error || 'Debug images unavailable.', 'error');
+      return;
+    }
+    const site = safeFilenamePart(response.site || 'page');
+    const page = safeFilenamePart(response.pageId || response.page || 'current');
+    downloadDataUrl(response.originalDataUrl, `frank-yomik-${site}-${page}-original.png`);
+    downloadDataUrl(response.translatedDataUrl, `frank-yomik-${site}-${page}-translated.png`);
+    setStatus('Debug images exported.', 'ok');
+  } catch (error) {
+    setStatus(error.message || String(error), 'error');
+  }
+}
+
+function downloadDataUrl(dataUrl, filename) {
+  if (!String(dataUrl || '').startsWith('data:image/')) throw new Error(`Invalid debug image: ${filename}`);
+  const link = document.createElement('a');
+  link.href = dataUrl;
+  link.download = filename;
+  link.click();
+}
+
+function safeFilenamePart(value) {
+  return String(value || 'page').toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80) || 'page';
 }
 
 function applySettings(settings) {

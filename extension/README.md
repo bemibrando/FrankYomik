@@ -10,6 +10,15 @@ The popup configures the self-hosted API URL, bearer token, enabled sites, manga
 
 ![Kindle page translated by the Chromium extension](docs/kindle-extension-translation.png)
 
+## Current-page debug controls
+
+The popup has two manual controls for bug reports and cache misses:
+
+- **Force reprocess current page**: resubmits the visible Kindle/Naver image with `force=true`, bypassing both the extension image cache and the server cache.
+- **Export debug images**: downloads the current original and translated page images as two PNG files so they can be compared side by side.
+
+An optional command named **Force reprocess the current Frank Yomik page** is registered for `chrome://extensions/shortcuts`, but it has no default key binding. This avoids clashes with Chrome, Google apps, and site shortcuts.
+
 ## Supported sites
 
 - Kindle Japan reader:
@@ -24,7 +33,7 @@ The popup configures the self-hosted API URL, bearer token, enabled sites, manga
 Use this path when you only want to install the extension, not develop it.
 
 1. Open the [latest Frank Yomik release](https://github.com/akitaonrails/FrankYomik/releases/latest).
-2. Download the extension zip asset, currently named `frank-yomik-extension-0.1.0.zip`.
+2. Download the extension zip asset named `frank-yomik-extension-*.zip`.
 3. Unzip it into a permanent folder, for example:
    - Linux: `~/Applications/frank-yomik-extension/`
    - macOS: `~/Applications/Frank Yomik Extension/`

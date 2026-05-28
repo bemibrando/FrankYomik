@@ -221,12 +221,13 @@ The desktop extension is the lightest way to use Frank Yomik directly on the Kin
 - Manga pipelines: English translation or furigana annotations
 - Webtoon pipeline: Korean → English
 - Per-site enable/disable, target-language selection, and webtoon prefetch settings
+- Manual force-reprocess and original-vs-translated debug image export from the popup
 
 ### Manual install from a GitHub release
 
 The extension is distributed as a zip asset on the [latest release](https://github.com/akitaonrails/FrankYomik/releases/latest). Chromium does not install this zip directly; load the extracted folder as an unpacked extension:
 
-1. Download `frank-yomik-extension-0.1.0.zip` from the latest release assets.
+1. Download `frank-yomik-extension-*.zip` from the latest release assets.
 2. Unzip it into a permanent folder, for example `~/Applications/frank-yomik-extension/`. Do not delete this folder after loading it.
 3. Open your browser's extension page:
    - Chrome/Chromium/Brave: `chrome://extensions`

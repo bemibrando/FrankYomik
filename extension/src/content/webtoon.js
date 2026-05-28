@@ -12,6 +12,7 @@
   ]);
   const MAX_CONCURRENT = 3;
   const RESCAN_MS = 2000;
+  const MAX_DEBUG_ENTRIES = 20;
 
   let started = false;
   let settings = {};
@@ -22,6 +23,7 @@
   const queue = [];
   const submitted = new Set();
   const pageById = new Map();
+  const debugEntries = new Map();
 
   window.FrankWebtoon = { start };
 
@@ -44,9 +46,18 @@
   }
 
   function installMessageListener() {
-    chrome.runtime.onMessage.addListener((message) => {
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (message?.type === 'FRANK_JOB_COMPLETE' && message.site === 'webtoon') handleJobComplete(message);
       if (message?.type === 'FRANK_JOB_FAILED' && message.site === 'webtoon') handleJobFailed(message);
+      if (message?.type === 'FRANK_FORCE_REPROCESS_CURRENT') {
+        forceReprocessCurrent().then(sendResponse).catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+        return true;
+      }
+      if (message?.type === 'FRANK_EXPORT_DEBUG_PAIR') {
+        exportDebugPair().then(sendResponse).catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
+        return true;
+      }
+      return false;
     });
   }
 
@@ -151,6 +162,7 @@
   async function submitImage(item) {
     try {
       const imageDataUrl = await captureImage(item.src);
+      rememberDebug(item.pageId, { pageId: item.pageId, site: 'webtoon', index: item.index, originalSrc: item.src, originalDataUrl: imageDataUrl });
       const response = await chrome.runtime.sendMessage({
         type: 'SUBMIT_CAPTURE',
         site: 'webtoon',
@@ -204,7 +216,56 @@
     if (known?.img && known.src && !message.capture?.originalSrc) {
       message.capture = { ...(message.capture || {}), originalSrc: known.src, index: known.index };
     }
-    return window.FrankOverlay?.applyWebtoonResult(message);
+    const ok = await window.FrankOverlay?.applyWebtoonResult(message);
+    if (ok) {
+      rememberDebug(message.pageId, {
+        pageId: message.pageId,
+        site: 'webtoon',
+        index: message.capture?.index,
+        originalSrc: message.capture?.originalSrc,
+        translatedDataUrl: message.imageDataUrl,
+      });
+    }
+    return ok;
+  }
+
+  async function forceReprocessCurrent() {
+    if (!settings.configured || settings.webtoonEnabled === false) throw new Error('Webtoon support is not enabled or configured.');
+    scanAndQueue();
+    const img = findCurrentVisibleImage();
+    if (!img) throw new Error('No visible Naver Webtoon image found.');
+    const index = findPageImages().indexOf(img);
+    const originalSrc = img.dataset.frankOriginalSrc || imageSrc(img);
+    if (!originalSrc || !isAllowedImageUrl(originalSrc)) throw new Error('Current webtoon original image URL is unavailable or not allowed.');
+    const pageId = `wt-${index >= 0 ? index : 'current'}-force-${Date.now()}`;
+    const imageDataUrl = await captureImage(originalSrc);
+    rememberDebug(pageId, { pageId, site: 'webtoon', index, originalSrc, originalDataUrl: imageDataUrl });
+    const response = await chrome.runtime.sendMessage({
+      type: 'SUBMIT_CAPTURE',
+      site: 'webtoon',
+      pageId,
+      priority: 'high',
+      metadata: parseWebtoonMetadata(index >= 0 ? index : 0),
+      capture: { originalSrc, index, pageMode: 'single' },
+      imageDataUrl,
+      force: true,
+    });
+    if (!response?.ok) throw new Error(response?.error || 'submit failed');
+    if (response.status === 'completed') await applyWebtoon(response);
+    return { ok: true, site: 'webtoon', pageId, message: 'Forced webtoon reprocess submitted.' };
+  }
+
+  async function exportDebugPair() {
+    scanAndQueue();
+    const img = findCurrentVisibleImage();
+    if (!img) throw new Error('No visible Naver Webtoon image found.');
+    const entry = debugEntryForImage(img);
+    const originalSrc = img.dataset.frankOriginalSrc || entry?.originalSrc || imageSrc(img);
+    const originalDataUrl = entry?.originalDataUrl || (originalSrc && isAllowedImageUrl(originalSrc) ? await captureImage(originalSrc) : null);
+    const translatedDataUrl = entry?.translatedDataUrl || (img.dataset.frankTranslated === 'true' ? await dataUrlFromSrc(img.src) : null);
+    if (!originalDataUrl) throw new Error('Original debug image unavailable for the current webtoon image.');
+    if (!translatedDataUrl) throw new Error('Translated debug image unavailable for the current webtoon image.');
+    return { ok: true, site: 'webtoon', pageId: entry?.pageId || img.dataset.frankPageId || `wt-${img.dataset.frankIndex || 'current'}`, originalDataUrl, translatedDataUrl };
   }
 
   function parseWebtoonMetadata(index) {
@@ -240,6 +301,50 @@
   function isNearViewport(img, margin) {
     const rect = img.getBoundingClientRect();
     return rect.bottom > -margin && rect.top < window.innerHeight + margin && rect.right > -200 && rect.left < window.innerWidth + 200;
+  }
+
+  function findCurrentVisibleImage() {
+    let best = null;
+    let bestArea = 0;
+    for (const img of findPageImages()) {
+      const rect = img.getBoundingClientRect();
+      const ox = Math.min(rect.right, window.innerWidth) - Math.max(rect.left, 0);
+      const oy = Math.min(rect.bottom, window.innerHeight) - Math.max(rect.top, 0);
+      const area = ox <= 0 || oy <= 0 ? 0 : ox * oy;
+      if (area > bestArea) {
+        bestArea = area;
+        best = img;
+      }
+    }
+    return best;
+  }
+
+  function rememberDebug(key, value) {
+    if (!key) return;
+    const previous = debugEntries.get(key) || {};
+    const entry = { ...previous, ...value, pageId: value.pageId || previous.pageId || key, updatedAt: Date.now() };
+    debugEntries.set(key, entry);
+    if (entry.originalSrc) debugEntries.set(entry.originalSrc, entry);
+    while (debugEntries.size > MAX_DEBUG_ENTRIES * 2) {
+      const oldestKey = debugEntries.keys().next().value;
+      debugEntries.delete(oldestKey);
+    }
+  }
+
+  function debugEntryForImage(img) {
+    const pageId = img.dataset.frankPageId || (img.dataset.frankIndex ? `wt-${img.dataset.frankIndex}` : '');
+    return debugEntries.get(pageId)
+      || debugEntries.get(img.dataset.frankOriginalSrc)
+      || debugEntries.get(imageSrc(img))
+      || null;
+  }
+
+  async function dataUrlFromSrc(src) {
+    if (!src) return null;
+    if (src.startsWith('data:image/')) return src;
+    const response = await fetch(src);
+    if (!response.ok) return null;
+    return blobToDataUrl(await response.blob());
   }
 
   function rootMarginForPrefetch() {
