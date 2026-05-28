@@ -16,6 +16,8 @@ from kindle.text_renderer import (
     _fit_vertical_font_size,
     _fit_furigana_stack,
     _expand_bright_region_bbox,
+    _expand_limited_no_mask_bbox,
+    _no_mask_furigana_layout_bbox,
     _mask_safe_bbox,
     _vertical_furigana_char_height,
     _vertical_main_char_height,
@@ -247,6 +249,22 @@ class TestBrightRegionExpansion:
         assert expanded[2] >= 104
         assert expanded[3] >= 159
 
+    def test_no_mask_layout_uses_bounded_bright_region(self):
+        img = Image.new("RGB", (140, 180), (90, 90, 90))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((25, 20, 105, 160), fill=(245, 245, 245))
+
+        expanded = _no_mask_furigana_layout_bbox(
+            img,
+            (55, 65, 75, 125),
+            min_extra_row_height=30,
+        )
+
+        assert expanded[0] <= 26
+        assert expanded[1] <= 21
+        assert expanded[2] >= 104
+        assert expanded[3] >= 159
+
     def test_leaves_box_when_no_bright_region_overlaps(self):
         img = Image.new("RGB", (100, 100), (80, 80, 80))
         bbox = (40, 30, 60, 70)
@@ -269,6 +287,49 @@ class TestBrightRegionExpansion:
         assert expanded[3] >= bbox[3]
         assert expanded[2] - expanded[0] <= 140
         assert expanded[3] - expanded[1] <= 180
+
+    def test_rejects_unbounded_bright_region_when_required(self):
+        img = Image.new("RGB", (120, 200), (80, 80, 80))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((40, 0, 80, 200), fill=(245, 245, 245))
+        bbox = (52, 80, 68, 120)
+
+        assert _expand_bright_region_bbox(
+            img,
+            bbox,
+            min_extra_row_height=30,
+            require_bounded_region=True,
+        ) == bbox
+
+    def test_limited_no_mask_fallback_stays_near_original_text_area(self):
+        img = Image.new("RGB", (400, 500), (245, 245, 245))
+        bbox = (190, 220, 210, 280)
+
+        expanded = _expand_limited_no_mask_bbox(
+            img,
+            bbox,
+            min_extra_row_height=30,
+        )
+
+        assert expanded[0] < bbox[0]
+        assert expanded[1] < bbox[1]
+        assert expanded[2] > bbox[2]
+        assert expanded[3] > bbox[3]
+        assert expanded[2] - expanded[0] <= 52
+        assert expanded[3] - expanded[1] <= 108
+
+    def test_no_mask_layout_fallback_rejects_open_page_gutter(self):
+        img = Image.new("RGB", (400, 500), (245, 245, 245))
+        bbox = (190, 220, 210, 280)
+
+        expanded = _no_mask_furigana_layout_bbox(
+            img,
+            bbox,
+            min_extra_row_height=30,
+        )
+
+        assert expanded[2] - expanded[0] <= 52
+        assert expanded[3] - expanded[1] <= 108
 
     def test_requires_an_extra_vertical_row_of_border_space(self):
         img = Image.new("RGB", (140, 180), (90, 90, 90))

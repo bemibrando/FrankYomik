@@ -34,6 +34,10 @@ _BRIGHT_REGION_MAX_HEIGHT_EXTRA = 120
 _BRIGHT_REGION_MIN_AREA_GAIN = 1.15
 _BRIGHT_REGION_MAX_BORDER_HOLE_RATIO = 0.015
 _BRIGHT_REGION_MAX_BORDER_HOLE_PIXELS = 24
+_NO_MASK_FALLBACK_MAX_PAD_X = 16
+_NO_MASK_FALLBACK_MAX_PAD_Y = 24
+_NO_MASK_FALLBACK_MIN_PAD_X = 6
+_NO_MASK_FALLBACK_MIN_PAD_Y = 8
 _FURIGANA_EXPANDED_MAX_FONT_RATIO = 1.15
 _FURIGANA_EXPANDED_MAX_FONT_EXTRA = 4
 _FURIGANA_SOURCE_MAX_FONT_RATIO = 1.15
@@ -597,7 +601,7 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
     if mask is None:
         initial_font_size = _fit_vertical_font_size(chars, bw, bh)
         original_font_size = initial_font_size
-        bbox = _expand_bright_region_bbox(
+        bbox = _no_mask_furigana_layout_bbox(
             img,
             bbox,
             min_extra_row_height=_vertical_main_char_height(initial_font_size),
@@ -1050,9 +1054,66 @@ def _fit_furigana_stack(target_size: int, total_height: int,
     return min_size, max(1, total_height // count)
 
 
+def _no_mask_furigana_layout_bbox(
+    img: Image.Image,
+    bbox: tuple[int, int, int, int],
+    min_extra_row_height: int | None = None,
+) -> tuple[int, int, int, int]:
+    """Choose layout space for furigana when no bubble mask is available.
+
+    Bounded bright regions (caption boxes, glows, missed balloon interiors) are
+    safe to use.  Open white gutters or panel backgrounds are not: expanding to
+    those connected components can let vertical text cross panel borders.  When
+    the bright region is unbounded, stay close to the detector's original text
+    bbox with only a small readability pad.
+    """
+    expanded = _expand_bright_region_bbox(
+        img,
+        bbox,
+        min_extra_row_height=min_extra_row_height,
+        require_bounded_region=True,
+    )
+    if expanded != bbox:
+        return expanded
+    return _expand_limited_no_mask_bbox(
+        img,
+        bbox,
+        min_extra_row_height=min_extra_row_height,
+    )
+
+
+def _expand_limited_no_mask_bbox(
+    img: Image.Image,
+    bbox: tuple[int, int, int, int],
+    min_extra_row_height: int | None = None,
+) -> tuple[int, int, int, int]:
+    """Small no-mask fallback expansion around the original text area."""
+    img_w, img_h = img.size
+    x1, y1, x2, y2 = _clamp_bbox(bbox, img_w, img_h)
+    if x2 <= x1 or y2 <= y1:
+        return bbox
+
+    row_h = max(1, int(min_extra_row_height or 0))
+    pad_x = min(
+        _NO_MASK_FALLBACK_MAX_PAD_X,
+        max(_NO_MASK_FALLBACK_MIN_PAD_X, (x2 - x1) // 4),
+    )
+    pad_y = min(
+        _NO_MASK_FALLBACK_MAX_PAD_Y,
+        max(_NO_MASK_FALLBACK_MIN_PAD_Y, row_h // 2),
+    )
+    return (
+        max(0, x1 - pad_x),
+        max(0, y1 - pad_y),
+        min(img_w, x2 + pad_x),
+        min(img_h, y2 + pad_y),
+    )
+
+
 def _expand_bright_region_bbox(img: Image.Image,
                                bbox: tuple[int, int, int, int],
                                min_extra_row_height: int | None = None,
+                               require_bounded_region: bool = False,
                                ) -> tuple[int, int, int, int]:
     """Expand no-mask furigana boxes into nearby white caption space.
 
@@ -1113,6 +1174,17 @@ def _expand_bright_region_bbox(img: Image.Image,
     ry = int(stats[label, cv2.CC_STAT_TOP])
     rw = int(stats[label, cv2.CC_STAT_WIDTH])
     rh = int(stats[label, cv2.CC_STAT_HEIGHT])
+
+    if require_bounded_region:
+        search_w = sx2 - sx1
+        search_h = sy2 - sy1
+        touches_search_edge = (
+            rx <= 0 or ry <= 0 or
+            rx + rw >= search_w or ry + rh >= search_h
+        )
+        if touches_search_edge:
+            return bbox
+
     ex1, ey1 = sx1 + rx, sy1 + ry
     ex2, ey2 = ex1 + rw, ey1 + rh
 
