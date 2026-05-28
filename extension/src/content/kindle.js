@@ -81,15 +81,29 @@
       if (message?.type === 'FRANK_JOB_COMPLETE' && message.site === 'kindle') handleJobComplete(message);
       if (message?.type === 'FRANK_JOB_FAILED' && message.site === 'kindle') handleJobFailed(message);
       if (message?.type === 'FRANK_FORCE_REPROCESS_CURRENT') {
+        if (!frameHostsKindleReader()) return false;
         forceReprocessCurrent().then(sendResponse).catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
         return true;
       }
       if (message?.type === 'FRANK_EXPORT_DEBUG_PAIR') {
+        if (!frameHostsKindleReader()) return false;
         exportDebugPair().then(sendResponse).catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
         return true;
       }
       return false;
     });
+  }
+
+  // Kindle injects content scripts into every frame (allFrames: true). Sub-frames
+  // like the javascript:void(0) telemetry shim don't host the reader and would
+  // race to reply "No current Kindle page image found" before the real frame
+  // finishes its work. Only the frame that actually contains a Kindle reader DOM
+  // should respond to popup-driven actions.
+  function frameHostsKindleReader() {
+    return !!document.querySelector(
+      '#kr-renderer, #kindle-reader-content, .reader-content, ' +
+      '[id*="kindle-reader"], [id*="kr-renderer"], [class*="reader-content"]',
+    );
   }
 
   function detectPageChange() {

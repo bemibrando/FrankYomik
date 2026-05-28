@@ -50,15 +50,26 @@
       if (message?.type === 'FRANK_JOB_COMPLETE' && message.site === 'webtoon') handleJobComplete(message);
       if (message?.type === 'FRANK_JOB_FAILED' && message.site === 'webtoon') handleJobFailed(message);
       if (message?.type === 'FRANK_FORCE_REPROCESS_CURRENT') {
+        if (!frameHostsWebtoonViewer()) return false;
         forceReprocessCurrent().then(sendResponse).catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
         return true;
       }
       if (message?.type === 'FRANK_EXPORT_DEBUG_PAIR') {
+        if (!frameHostsWebtoonViewer()) return false;
         exportDebugPair().then(sendResponse).catch((error) => sendResponse({ ok: false, error: error.message || String(error) }));
         return true;
       }
       return false;
     });
+  }
+
+  // Only the frame that actually contains the Naver Webtoon viewer should reply
+  // to popup-driven actions — empty sub-frames race their fast failures against
+  // the real frame's work and win.
+  function frameHostsWebtoonViewer() {
+    return !!document.querySelector(
+      '#comic_view_area, .wt_viewer, #sectionContWide, img.toon_image',
+    );
   }
 
   function installObservers() {
