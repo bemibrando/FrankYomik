@@ -107,10 +107,54 @@ async function runActiveTabAction(action) {
   if (!messageType) throw new Error('unknown active tab action');
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error('No active tab found.');
-  const response = await chrome.tabs.sendMessage(tab.id, { type: messageType });
+  let response = null;
+  try {
+    response = await chrome.tabs.sendMessage(tab.id, { type: messageType });
+  } catch (error) {
+    if (!isMissingContentScriptError(error)) throw error;
+    await injectContentScriptsForTab(tab);
+    response = await chrome.tabs.sendMessage(tab.id, { type: messageType });
+  }
   if (!response?.ok) throw new Error(response?.error || 'Content script could not run the action.');
   await recordEvent({ site: response.site || 'extension', level: 'info', message: `Active tab action completed: ${action}` });
   return response;
+}
+
+async function injectContentScriptsForTab(tab) {
+  const site = siteForTabUrl(tab.url || '');
+  if (!site) {
+    throw new Error('Open a Kindle or Naver Webtoon reader tab, then use the Frank Yomik popup from that tab.');
+  }
+  const files = site === 'kindle'
+    ? ['src/content/overlay.js', 'src/content/kindle.js', 'src/content/bootstrap.js']
+    : ['src/content/overlay.js', 'src/content/webtoon.js', 'src/content/bootstrap.js'];
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id, allFrames: site === 'kindle' },
+      files,
+    });
+    await sleep(250);
+  } catch (error) {
+    throw new Error(`Could not inject Frank Yomik into this tab. Reload the reader tab and try again. ${error.message || error}`);
+  }
+}
+
+function siteForTabUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    const host = url.hostname.toLowerCase();
+    if (KINDLE_HOSTS.has(host)) return 'kindle';
+    if (NAVER_WEBTOON_HOSTS.has(host)) return 'webtoon';
+  } catch {
+    // Ignore invalid/non-web extension page URLs.
+  }
+  return '';
+}
+
+function isMissingContentScriptError(error) {
+  const message = String(error?.message || error || '');
+  return message.includes('Receiving end does not exist') ||
+    message.includes('Could not establish connection');
 }
 
 async function getSettings() {

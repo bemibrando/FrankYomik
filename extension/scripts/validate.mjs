@@ -59,6 +59,7 @@ if (kindleScript && kindleScript.js?.includes('src/content/webtoon.js')) fail('K
 if (webtoonScript && !webtoonScript.js?.includes('src/content/webtoon.js')) fail('Webtoon declaration must include webtoon.js');
 if (webtoonScript && webtoonScript.js?.includes('src/content/kindle.js')) fail('Webtoon declaration must not include kindle.js');
 
+const allowedPermissions = new Set(['activeTab', 'alarms', 'scripting', 'storage']);
 const forbiddenPermissions = new Set(['tabs', 'webRequest', 'webRequestBlocking', '<all_urls>']);
 const allowedHostPermissions = new Set([
   'https://image-comic.pstatic.net/*',
@@ -67,6 +68,7 @@ const allowedHostPermissions = new Set([
 ]);
 for (const permission of manifest.permissions ?? []) {
   if (forbiddenPermissions.has(permission)) fail(`forbidden permission: ${permission}`);
+  if (!allowedPermissions.has(permission)) fail(`unexpected permission: ${permission}`);
 }
 for (const origin of manifest.host_permissions ?? []) {
   if (!allowedHostPermissions.has(origin)) fail(`unexpected static host permission: ${origin}`);
