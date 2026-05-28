@@ -33,6 +33,22 @@ DEFAULT_HEARTBEAT_TTL = 60  # seconds
 DEFAULT_PROGRESS_TTL = 60  # seconds
 DEFAULT_HIGH_BURST_BEFORE_LOW = 3
 
+# Redis/network timing. Values are deliberately conservative because workers run
+# on a LAN server and should recover from brief Redis restarts without dropping
+# stream entries.
+REDIS_SOCKET_TIMEOUT_SECONDS = 30
+REDIS_CONNECT_TIMEOUT_SECONDS = 10
+RECONNECT_DELAY_SECONDS = 5
+ERROR_RETRY_DELAY_SECONDS = 1
+
+# Stream scheduling and PEL recovery.
+HIGH_POLL_BLOCK_MS = 100
+LOW_PROBE_BLOCK_MS = 100
+LOW_POLL_BLOCK_MS = 1000
+PENDING_CLAIM_INTERVAL_SECONDS = 30
+PENDING_MIN_IDLE_MS = 60_000
+PENDING_CLAIM_COUNT = 10
+
 
 def _redact_url(url_str: str) -> str:
     """Mask the password in a Redis URL for safe logging."""
@@ -86,8 +102,8 @@ class Consumer:
         self._rdb = redis.from_url(
             self.redis_url,
             decode_responses=False,
-            socket_timeout=30,
-            socket_connect_timeout=10,
+            socket_timeout=REDIS_SOCKET_TIMEOUT_SECONDS,
+            socket_connect_timeout=REDIS_CONNECT_TIMEOUT_SECONDS,
         )
         self._rdb.ping()
         log.info("Connected to Redis: %s", _redact_url(self.redis_url))
@@ -118,8 +134,9 @@ class Consumer:
             try:
                 self._tick()
             except redis.ConnectionError:
-                log.warning("Redis connection lost, reconnecting in 5s...")
-                time.sleep(5)
+                log.warning("Redis connection lost, reconnecting in %ds...",
+                            RECONNECT_DELAY_SECONDS)
+                time.sleep(RECONNECT_DELAY_SECONDS)
                 try:
                     self.connect()
                 except Exception:
@@ -131,13 +148,13 @@ class Consumer:
                         self.connect()
                     except Exception:
                         log.exception("Re-create consumer group failed")
-                    time.sleep(1)
+                    time.sleep(ERROR_RETRY_DELAY_SECONDS)
                 else:
                     log.exception("Redis error in consumer loop")
-                    time.sleep(1)
+                    time.sleep(ERROR_RETRY_DELAY_SECONDS)
             except Exception:
                 log.exception("Unexpected error in consumer loop")
-                time.sleep(1)
+                time.sleep(ERROR_RETRY_DELAY_SECONDS)
 
         log.info("Worker %s shutting down", self.consumer_name)
 
@@ -147,14 +164,14 @@ class Consumer:
 
         # After a burst of high jobs, probe low first to avoid starvation.
         if self._high_streak >= self.high_burst_before_low:
-            msg = self._read_one(STREAM_LOW, block_ms=100)
+            msg = self._read_one(STREAM_LOW, block_ms=LOW_PROBE_BLOCK_MS)
             if msg is None:
-                msg = self._read_one(STREAM_HIGH, block_ms=100)
+                msg = self._read_one(STREAM_HIGH, block_ms=HIGH_POLL_BLOCK_MS)
         else:
             # Normal path: prefer current-page responsiveness.
-            msg = self._read_one(STREAM_HIGH, block_ms=100)
+            msg = self._read_one(STREAM_HIGH, block_ms=HIGH_POLL_BLOCK_MS)
             if msg is None:
-                msg = self._read_one(STREAM_LOW, block_ms=1000)
+                msg = self._read_one(STREAM_LOW, block_ms=LOW_POLL_BLOCK_MS)
 
         if msg is not None:
             stream, msg_id, fields = msg
@@ -168,7 +185,7 @@ class Consumer:
         now = time.monotonic()
         if now - self._last_heartbeat >= self.heartbeat_interval:
             self._heartbeat()
-        if now - self._last_claim >= 30:
+        if now - self._last_claim >= PENDING_CLAIM_INTERVAL_SECONDS:
             self._claim_pending()
 
     def _claim_pending(self) -> None:
@@ -185,9 +202,9 @@ class Consumer:
                 # Returns (next_start_id, [(msg_id, fields), ...], [deleted_ids])
                 result = self._rdb.xautoclaim(
                     stream, self.consumer_group, self.consumer_name,
-                    min_idle_time=60_000,  # 60 seconds
+                    min_idle_time=PENDING_MIN_IDLE_MS,
                     start_id="0-0",
-                    count=10,
+                    count=PENDING_CLAIM_COUNT,
                 )
                 if not result or not result[1]:
                     continue

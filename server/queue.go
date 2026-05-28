@@ -21,6 +21,12 @@ const (
 	imageTTL        = 0 // no expiry — v2 cache is authoritative, Redis is fallback
 	dedupTTL        = 1 * time.Hour
 	latestTTL       = 10 * time.Minute
+
+	// Dedup can point at jobs whose Redis result or stream entry is gone.  Use a
+	// shorter threshold after a completed-result lookup miss and a longer one for
+	// queued duplicate submits, where the original worker may simply be slow.
+	completedDedupStaleThreshold = 60 * time.Second
+	queuedDedupStaleThreshold    = 2 * time.Minute
 )
 
 // Queue handles Redis stream operations for job submission.
@@ -56,7 +62,7 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 	// Compute SHA256 for dedup
 	hash := fmt.Sprintf("%x", sha256.Sum256(imageBytes))
 	latest := latestMarkerFor(priority, meta)
-	forceNew := meta != nil && (meta.RerenderFromMetadata || meta.ForceReprocess) || latest.ok
+	forceNew := (meta != nil && (meta.RerenderFromMetadata || meta.ForceReprocess)) || latest.ok
 	targetLang := "en"
 	if meta != nil && meta.TargetLang != "" {
 		targetLang = meta.TargetLang
@@ -74,7 +80,7 @@ func (q *Queue) SubmitJob(ctx context.Context, imageBytes []byte, pipeline, prio
 			// 2 minutes ago and never completed, the stream entry was likely
 			// consumed or trimmed by a previous worker session. Clear the dedup
 			// entry and re-enqueue.
-			if jobIsStale(existingJobID, 2*time.Minute) {
+			if jobIsStale(existingJobID, queuedDedupStaleThreshold) {
 				log.Printf("INFO: stale dedup hit for %s (job %s), re-enqueuing", dedupField, existingJobID)
 				q.rdb.HDel(ctx, dedupKey, dedupField)
 			} else {
@@ -253,12 +259,10 @@ func jobIsStale(jobID string, threshold time.Duration) bool {
 	return time.Since(created) > threshold
 }
 
-// CancelJob removes a pending job from the dedup hash.
-// Stream messages can't be easily cancelled, but the worker will skip
-// jobs whose image key has been deleted.
+// CancelJob removes transient result keys for a job.
+// Stream messages and dedup entries are intentionally left alone; real
+// cancellation would require scanning Redis Streams and the dedup hash.
 func (q *Queue) CancelJob(ctx context.Context, jobID string) error {
-	// Remove from dedup (allow re-submission)
-	// We'd need to scan dedup hash — for now, delete result keys
 	resultKey := "frank:results:" + jobID
 	resultImgKey := "frank:results:img:" + jobID
 	q.rdb.Del(ctx, resultKey, resultImgKey)

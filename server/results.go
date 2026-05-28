@@ -13,7 +13,7 @@ const (
 	resultKeyPrefix    = "frank:results:"
 	resultImgKeyPrefix = "frank:results:img:"
 	heartbeatPrefix    = "frank:worker:"
-	resultTTL          = 1 * time.Hour
+	activeWorkerWindow = 90 * time.Second
 )
 
 // Results handles job result storage and retrieval.
@@ -87,7 +87,7 @@ func (r *Results) GetActiveWorkers(ctx context.Context) ([]WorkerInfo, error) {
 		return nil, err
 	}
 
-	now := time.Now().Unix()
+	now := time.Now()
 	var workers []WorkerInfo
 
 	for _, key := range keys {
@@ -95,7 +95,7 @@ func (r *Results) GetActiveWorkers(ctx context.Context) ([]WorkerInfo, error) {
 		if err != nil {
 			continue
 		}
-		if now-ts < 90 {
+		if now.Sub(time.Unix(ts, 0)) < activeWorkerWindow {
 			// Extract name: frank:worker:<name>:heartbeat
 			name := key[len(heartbeatPrefix) : len(key)-len(":heartbeat")]
 			workers = append(workers, WorkerInfo{

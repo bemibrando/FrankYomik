@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Any, Callable
 from kindle.config import EN_PAGE_FONT_DIVISOR, MIN_FONT_SIZE
-from kindle.bubble_detector import detect_bubbles, extract_bubble_mask_manga
+from kindle.bubble_detector import extract_bubble_mask_manga
 from kindle.furigana import annotate as furigana_annotate
 from kindle.image_utils import (
     clear_text_in_region,

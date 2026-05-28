@@ -1,6 +1,5 @@
 """Worker health check utilities."""
 
-import json
 import logging
 import time
 
@@ -9,6 +8,8 @@ import redis
 from .consumer import HEARTBEAT_PREFIX, STREAM_HIGH, STREAM_LOW
 
 log = logging.getLogger(__name__)
+
+ACTIVE_WORKER_WINDOW_SECONDS = 90
 
 
 def check_health(redis_url: str, consumer_group: str = "workers") -> dict:
@@ -35,7 +36,7 @@ def check_health(redis_url: str, consumer_group: str = "workers") -> dict:
     active_workers = []
     for key in worker_keys:
         ts = rdb.get(key)
-        if ts and now - int(ts) < 90:
+        if ts and now - int(ts) < ACTIVE_WORKER_WINDOW_SECONDS:
             # Extract worker name from key pattern
             name = key.replace(HEARTBEAT_PREFIX, "").replace(":heartbeat", "")
             active_workers.append({"name": name, "last_heartbeat": int(ts)})

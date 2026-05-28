@@ -316,8 +316,6 @@ def _is_column_neighbor(det: TextDetection,
             return True
     return False
 
-    return rescued
-
 
 def ocr_within_bbox(img: np.ndarray,
                     bbox: tuple[int, int, int, int],

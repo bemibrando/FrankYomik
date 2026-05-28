@@ -2,7 +2,6 @@
 
 import argparse
 import logging
-import sys
 
 from kindle.config import _load_yaml_config
 from .consumer import Consumer

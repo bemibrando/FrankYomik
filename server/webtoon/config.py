@@ -14,7 +14,6 @@ from kindle.config import (
     TRANSLATE_OPTIONS,
     TRANSLATE_THINK,
     FONT_EN,
-    FONT_EN_BOLD,
     FONT_SFX,
 )
 

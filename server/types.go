@@ -1,23 +1,5 @@
 package main
 
-import "time"
-
-// Job represents a processing job in the system.
-type Job struct {
-	ID         string    `json:"id"`
-	Pipeline   string    `json:"pipeline"`
-	Priority   string    `json:"priority"`
-	Status     string    `json:"status"`
-	ImageKey   string    `json:"-"`
-	ImageHash  string    `json:"-"`
-	CreatedAt  time.Time `json:"created_at"`
-	DedupHit   bool      `json:"dedup_hit,omitempty"`
-	Title      string    `json:"title,omitempty"`
-	Chapter    string    `json:"chapter,omitempty"`
-	PageNumber string    `json:"page_number,omitempty"`
-	SourceURL  string    `json:"source_url,omitempty"`
-}
-
 // JobResponse is the API response for job creation/status.
 type JobResponse struct {
 	JobID       string `json:"job_id"`

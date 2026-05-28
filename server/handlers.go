@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -212,7 +211,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		// Dedup returned an old job ID with no result in Redis.
 		// The job was likely processed and its result expired, or the
 		// stream entry was lost.  Re-enqueue to ensure processing.
-		if jobIsStale(jobID, 60*time.Second) {
+		if jobIsStale(jobID, completedDedupStaleThreshold) {
 			log.Printf("INFO: dedup job %s has no result and is stale, re-enqueuing", jobID)
 			meta.ForceReprocess = true
 			if newID, _, err2 := s.queue.SubmitJob(r.Context(), imageBytes, pipeline, priority, meta); err2 == nil {
