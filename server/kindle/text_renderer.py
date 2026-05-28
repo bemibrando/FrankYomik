@@ -34,10 +34,14 @@ _BRIGHT_REGION_MAX_HEIGHT_EXTRA = 120
 _BRIGHT_REGION_MIN_AREA_GAIN = 1.15
 _BRIGHT_REGION_MAX_BORDER_HOLE_RATIO = 0.015
 _BRIGHT_REGION_MAX_BORDER_HOLE_PIXELS = 24
-_FURIGANA_EXPANDED_MAX_FONT_RATIO = 1.30
-_FURIGANA_EXPANDED_MAX_FONT_EXTRA = 8
-_FURIGANA_SOURCE_MAX_FONT_RATIO = 1.30
-_FURIGANA_SOURCE_MAX_FONT_EXTRA = 8
+_FURIGANA_EXPANDED_MAX_FONT_RATIO = 1.15
+_FURIGANA_EXPANDED_MAX_FONT_EXTRA = 4
+_FURIGANA_SOURCE_MAX_FONT_RATIO = 1.15
+_FURIGANA_SOURCE_MAX_FONT_EXTRA = 4
+_FURIGANA_PAGE_NORMAL_CAP_RATIO = 1.20
+_FURIGANA_PAGE_NORMAL_CAP_EXTRA = 5
+_FURIGANA_PAGE_OUTLIER_RATIO = 1.55
+_FURIGANA_PAGE_OUTLIER_EXTRA = 10
 _SOURCE_FONT_MAX_DARK_DENSITY = 0.35
 _SOURCE_FONT_MIN_DARK_PIXELS = 12
 
@@ -542,7 +546,9 @@ _VERTICAL_ROTATE_CHARS = frozenset("ー～—")
 def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
                              segments: list[dict],
                              mask: 'np.ndarray | None' = None,
-                             source_font_size: int | None = None) -> None:
+                             source_font_size: int | None = None,
+                             page_font_cap: int | None = None,
+                             source_outlier_threshold: int | None = None) -> None:
     """Render vertical Japanese text with furigana inside a bubble region.
 
     When `mask` is provided, the bbox is first tightened to the mask's
@@ -604,6 +610,12 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
         )
     if source_font_size is not None:
         font_size = _cap_furigana_to_source_scale(font_size, source_font_size)
+    font_size = _cap_furigana_to_page_dialogue_scale(
+        font_size,
+        source_font_size=source_font_size,
+        page_font_cap=page_font_cap,
+        source_outlier_threshold=source_outlier_threshold,
+    )
     furi_size = _furigana_font_size(font_size)
 
     font = _load_font(FONT_JP, font_size)
@@ -797,6 +809,47 @@ def _cap_furigana_to_source_scale(fitted_size: int, source_size: int) -> int:
     return max(MIN_FONT_SIZE, min(fitted_size, ratio_cap, extra_cap))
 
 
+def compute_furigana_page_font_limits(
+    source_sizes: list[int],
+) -> tuple[int | None, int | None]:
+    """Compute soft page caps for normal dialogue without flattening SFX.
+
+    Most manga dialogue on one page uses a narrow source glyph-size band.  Use
+    the robust median to prevent normal bubbles from drifting wildly, but keep
+    source-size outliers (large shouts/SFX/captions) eligible for larger text.
+    """
+    clean = sorted(size for size in source_sizes if size and size > 0)
+    if len(clean) < 3:
+        return None, None
+    median = int(np.median(clean))
+    if median <= 0:
+        return None, None
+    normal_cap = min(
+        int(round(median * _FURIGANA_PAGE_NORMAL_CAP_RATIO)),
+        median + _FURIGANA_PAGE_NORMAL_CAP_EXTRA,
+    )
+    outlier_threshold = max(
+        int(round(median * _FURIGANA_PAGE_OUTLIER_RATIO)),
+        median + _FURIGANA_PAGE_OUTLIER_EXTRA,
+    )
+    return max(MIN_FONT_SIZE, normal_cap), max(MIN_FONT_SIZE, outlier_threshold)
+
+
+def _cap_furigana_to_page_dialogue_scale(
+    fitted_size: int,
+    *,
+    source_font_size: int | None,
+    page_font_cap: int | None,
+    source_outlier_threshold: int | None,
+) -> int:
+    if page_font_cap is None:
+        return fitted_size
+    if source_font_size is not None and source_outlier_threshold is not None:
+        if source_font_size >= source_outlier_threshold:
+            return fitted_size
+    return max(MIN_FONT_SIZE, min(fitted_size, page_font_cap))
+
+
 def estimate_source_vertical_font_size(
     img: Image.Image,
     bbox: tuple[int, int, int, int],
@@ -877,8 +930,9 @@ def estimate_source_vertical_font_size(
 
     size = int(round(float(np.percentile(sizes, 75)) * 1.10))
 
-    # If OCR text length gives a plausible vertical run estimate, blend it in.
-    # This stabilizes multi-stroke kanji whose connected components split small.
+    # If OCR text length gives a plausible vertical run estimate, blend it in
+    # conservatively.  Short text is exactly where unrestricted run estimates
+    # overstate source size and allow huge rendered text.
     char_count = _source_text_char_count(ocr_text)
     if char_count >= 2:
         ys, xs = np.where(dark_u8 > 0)
@@ -888,7 +942,11 @@ def estimate_source_vertical_font_size(
             chars_per_col = max(1, int(np.ceil(char_count / max(1, cols))))
             run_est = int(round(ink_h / chars_per_col * 1.15))
             if MIN_FONT_SIZE <= run_est <= MAX_FONT_SIZE:
-                size = max(size, run_est)
+                if char_count >= 4:
+                    capped_run = min(run_est, int(size * 1.25), size + 6)
+                else:
+                    capped_run = min(run_est, int(size * 1.10), size + 3)
+                size = max(size, capped_run)
 
     return max(MIN_FONT_SIZE, min(MAX_FONT_SIZE, size))
 

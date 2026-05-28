@@ -9,6 +9,7 @@ from kindle.text_renderer import (
     _choose_layout,
     _cap_expanded_furigana_font_size,
     _cap_furigana_to_source_scale,
+    compute_furigana_page_font_limits,
     estimate_source_vertical_font_size,
     _furigana_font_size,
     _fit_vertical_font_size,
@@ -108,15 +109,21 @@ class TestFuriganaSizing:
     def test_expanded_furigana_caps_near_original_text_scale(self):
         # Bright whitespace can improve cramped no-mask captions, but should not
         # turn normal narration into oversized headline text.
-        assert _cap_expanded_furigana_font_size(40, 20) == 26
-        assert _cap_expanded_furigana_font_size(60, 30) == 38
+        assert _cap_expanded_furigana_font_size(40, 20) == 23
+        assert _cap_expanded_furigana_font_size(60, 30) == 34
 
     def test_expanded_furigana_cap_does_not_force_growth(self):
         assert _cap_expanded_furigana_font_size(18, 20) == 18
 
     def test_source_scale_cap_is_per_bubble(self):
-        assert _cap_furigana_to_source_scale(60, 20) == 26
+        assert _cap_furigana_to_source_scale(60, 20) == 23
         assert _cap_furigana_to_source_scale(18, 20) == 18
+
+    def test_page_font_limits_cap_normal_dialogue_but_preserve_outliers(self):
+        cap, outlier = compute_furigana_page_font_limits([20, 21, 22, 30, 45])
+
+        assert cap == 26
+        assert outlier == 34
 
     def test_estimates_small_source_text_in_large_bubble(self):
         img = Image.new("RGB", (160, 220), "white")

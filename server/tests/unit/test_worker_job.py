@@ -658,6 +658,39 @@ class TestRerenderFromMetadata:
         assert result.bubble_count == 1
         assert mock_render.call_args.kwargs["source_font_size"] == 22
 
+    @patch("worker.job.render_furigana_vertical")
+    def test_rerender_furigana_passes_page_font_limits(self, mock_render):
+        """Rerender should use soft page caps for normal dialogue variance."""
+        img_bytes = _make_test_image_bytes(240, 320)
+        segments = [{"text": "漢字", "furigana": "かんじ", "needs_furigana": True}]
+        regions = []
+        for idx, source_size in enumerate((20, 22, 45), start=1):
+            y = idx * 50
+            regions.append({
+                "id": f"r{idx}",
+                "kind": "bubble",
+                "bbox": [10, y, 90, y + 45],
+                "ocr_text": "漢字",
+                "source_font_size": source_size,
+                "transformed": {"kind": "furigana_segments", "value": segments},
+                "user": {"manual_translation": ""},
+            })
+        job = ProcessingJob(
+            job_id="rr-furi-page-cap",
+            pipeline="manga_furigana",
+            image_bytes=img_bytes,
+            rerender_from_metadata=True,
+            metadata_payload={"regions": regions},
+        )
+
+        result = process_job(job)
+
+        assert result.status == "completed"
+        assert result.bubble_count == 3
+        for call_args in mock_render.call_args_list:
+            assert call_args.kwargs["page_font_cap"] == 26
+            assert call_args.kwargs["source_outlier_threshold"] == 34
+
 
 # --- Parallel translation ---
 

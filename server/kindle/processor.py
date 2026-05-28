@@ -19,9 +19,9 @@ from .image_utils import (
 )
 from .ocr import extract_text_from_region, is_valid_japanese
 from .text_renderer import (
-    compute_bubble_font_size, draw_debug_boxes, render_english,
-    estimate_source_vertical_font_size, render_english_on_artwork,
-    render_furigana_vertical,
+    compute_bubble_font_size, compute_furigana_page_font_limits,
+    draw_debug_boxes, estimate_source_vertical_font_size, render_english,
+    render_english_on_artwork, render_furigana_vertical,
 )
 from .translator import translate
 
@@ -233,8 +233,12 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
     # Two-pass rendering: clear all bubbles first, then render all text.
     # This prevents overlapping bubbles from erasing each other's rendered text.
 
+    page_font_cap = None
+    source_outlier_threshold = None
     if mode == PipelineMode.FURIGANA:
-        _estimate_furigana_source_font_sizes(page)
+        page_font_cap, source_outlier_threshold = (
+            _estimate_furigana_source_font_sizes(page)
+        )
 
     # Pass 1: Clear text strokes and inpaint artwork
     artwork_inpainted: set[int] = set()
@@ -262,7 +266,9 @@ def render_page(page: PageResult, mode: PipelineMode, out_dir: str,
         if mode == PipelineMode.FURIGANA:
             render_furigana_vertical(page.output_img, br.bbox, br.transformed,
                                      mask=br.mask,
-                                     source_font_size=br.source_font_size)
+                                     source_font_size=br.source_font_size,
+                                     page_font_cap=page_font_cap,
+                                     source_outlier_threshold=source_outlier_threshold)
         else:
             size = font_sizes.get(i, base_font_size)
             render_english(page.output_img, br.bbox, br.transformed,
@@ -298,8 +304,12 @@ def render_page_to_bytes(page: PageResult, mode: PipelineMode,
             page.bubble_results, base_font_size)
 
     # Two-pass rendering (same as render_page)
+    page_font_cap = None
+    source_outlier_threshold = None
     if mode == PipelineMode.FURIGANA:
-        _estimate_furigana_source_font_sizes(page)
+        page_font_cap, source_outlier_threshold = (
+            _estimate_furigana_source_font_sizes(page)
+        )
 
     artwork_inpainted: set[int] = set()
     for i, br in enumerate(page.bubble_results):
@@ -325,7 +335,9 @@ def render_page_to_bytes(page: PageResult, mode: PipelineMode,
         if mode == PipelineMode.FURIGANA:
             render_furigana_vertical(page.output_img, br.bbox, br.transformed,
                                      mask=br.mask,
-                                     source_font_size=br.source_font_size)
+                                     source_font_size=br.source_font_size,
+                                     page_font_cap=page_font_cap,
+                                     source_outlier_threshold=source_outlier_threshold)
         else:
             size = font_sizes.get(i, base_font_size)
             render_english(page.output_img, br.bbox, br.transformed,
@@ -334,8 +346,9 @@ def render_page_to_bytes(page: PageResult, mode: PipelineMode,
     return encode_image_pil(page.output_img)
 
 
-def _estimate_furigana_source_font_sizes(page: PageResult) -> None:
+def _estimate_furigana_source_font_sizes(page: PageResult) -> tuple[int | None, int | None]:
     """Estimate each furigana region's original glyph size before clearing."""
+    source_sizes: list[int] = []
     for br in page.bubble_results:
         if br.transformed is None:
             continue
@@ -345,3 +358,6 @@ def _estimate_furigana_source_font_sizes(page: PageResult) -> None:
             br.ocr_text,
             mask=br.mask,
         )
+        if br.source_font_size is not None:
+            source_sizes.append(br.source_font_size)
+    return compute_furigana_page_font_limits(source_sizes)

@@ -26,6 +26,7 @@ from kindle.processor import (
 )
 from kindle.translator import translate
 from kindle.text_renderer import (
+    compute_furigana_page_font_limits,
     estimate_source_vertical_font_size,
     render_english,
     render_furigana_vertical,
@@ -319,12 +320,19 @@ def _rerender_from_metadata(job: ProcessingJob,
             clear_text_strokes(img_out, item["bbox"], mask=item["mask"])
 
     # Pass 2: Render
+    page_font_cap, source_outlier_threshold = compute_furigana_page_font_limits([
+        int(item["source_font_size"])
+        for item in render_items
+        if item["mode"] == "furigana" and item.get("source_font_size") is not None
+    ])
     applied = 0
     for item in render_items:
         if item["mode"] == "furigana":
             render_furigana_vertical(img_out, item["bbox"], item["value"],
                                      mask=item["mask"],
-                                     source_font_size=item.get("source_font_size"))
+                                     source_font_size=item.get("source_font_size"),
+                                     page_font_cap=page_font_cap,
+                                     source_outlier_threshold=source_outlier_threshold)
         else:
             render_english(img_out, item["bbox"], item["value"],
                            base_font_size=base_font_size, mask=item["mask"])
