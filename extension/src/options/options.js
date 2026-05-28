@@ -14,6 +14,9 @@ const fields = {
 };
 const activeJobsEl = document.querySelector('#active-jobs');
 const diagnosticsListEl = document.querySelector('#diagnostics-list');
+let lastSavedSignature = '';
+let saveInFlight = null;
+let autoSaveTimer = null;
 
 loadSettings();
 refreshDiagnostics();
@@ -21,8 +24,15 @@ window.setInterval(refreshDiagnostics, 2000);
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
-  await saveSettings();
+  await saveSettings({ force: true });
 });
+
+for (const field of Object.values(fields)) {
+  field.addEventListener('blur', scheduleAutosave);
+  if (field.type === 'checkbox' || field.tagName === 'SELECT') {
+    field.addEventListener('change', scheduleAutosave);
+  }
+}
 
 document.querySelector('#health-check').addEventListener('click', async () => {
   setStatus('Checking server…');
@@ -49,21 +59,34 @@ async function loadSettings() {
     return;
   }
   applySettings(response.settings || {});
+  markSettingsSaved();
 }
 
-async function saveSettings() {
+async function saveSettings({ force = false } = {}) {
+  if (saveInFlight) await saveInFlight;
+  if (!force && settingsSignature() === lastSavedSignature) return true;
+
+  saveInFlight = saveSettingsNow().finally(() => {
+    saveInFlight = null;
+  });
+  return saveInFlight;
+}
+
+async function saveSettingsNow() {
   setStatus('Saving…');
   const settings = readSettings();
   const permissionGranted = await requestApiPermission(settings.apiBaseUrl);
-  if (!permissionGranted) return;
+  if (!permissionGranted) return false;
   const response = await sendMessage({ type: 'SAVE_SETTINGS', settings });
   if (!response.ok) {
     setStatus(response.error || 'Could not save settings.', 'error');
-    return;
+    return false;
   }
   applySettings(response.settings || {});
+  markSettingsSaved();
   setStatus('Saved.', 'ok');
   await refreshDiagnostics();
+  return true;
 }
 
 function exportSettings() {
@@ -85,7 +108,7 @@ async function importSettingsFile(event) {
   try {
     const imported = JSON.parse(await file.text());
     applySettings(imported);
-    await saveSettings();
+    await saveSettings({ force: true });
   } catch (error) {
     setStatus(`Import failed: ${error.message || error}`, 'error');
   }
@@ -113,13 +136,37 @@ function readSettings() {
   };
 }
 
+function scheduleAutosave() {
+  window.clearTimeout(autoSaveTimer);
+  autoSaveTimer = window.setTimeout(() => {
+    autoSaveTimer = null;
+    saveSettings().catch((error) => {
+      setStatus(error.message || String(error), 'error');
+    });
+  }, 150);
+}
+
+function settingsSignature(settings = readSettings()) {
+  return JSON.stringify(settings);
+}
+
+function markSettingsSaved() {
+  lastSavedSignature = settingsSignature();
+}
+
 async function requestApiPermission(apiBaseUrl) {
   const normalized = normalizeApiBaseUrl(apiBaseUrl);
   if (!normalized) return true;
   const origin = apiOriginPattern(normalized);
   const alreadyGranted = await chrome.permissions.contains({ origins: [origin] });
   if (alreadyGranted) return true;
-  const granted = await chrome.permissions.request({ origins: [origin] });
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request({ origins: [origin] });
+  } catch (error) {
+    setStatus(`Could not request API permission for ${origin}. Click Save now to retry.`, 'error');
+    return false;
+  }
   if (!granted) {
     setStatus(`Permission denied for ${origin}.`, 'error');
     return false;

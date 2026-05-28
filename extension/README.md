@@ -26,7 +26,7 @@ The extension intentionally keeps Kindle and Naver pages close to vanilla: it do
    - API base URL, for example `https://frank.example.net` or a trusted-LAN URL.
    - auth token matching server `AUTH_TOKEN`.
    - manga pipeline and target language.
-7. Click **Save** and allow the exact API-origin permission when Chromium asks.
+7. Leave a field or click **Save now** to save, then allow the exact API-origin permission when Chromium asks.
 8. Click **Check server**.
 9. Reload any Kindle/Naver tabs that were already open before installing or updating the extension.
 

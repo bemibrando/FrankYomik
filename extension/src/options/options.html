@@ -22,7 +22,7 @@
           <input id="auth-token" name="authToken" type="password" autocomplete="current-password">
         </label>
 
-        <fieldset>
+        <fieldset class="sites-fieldset">
           <legend>Sites</legend>
           <label class="row"><input id="kindle-enabled" name="kindleEnabled" type="checkbox"> Kindle reader</label>
           <label class="row"><input id="webtoon-enabled" name="webtoonEnabled" type="checkbox"> Naver Webtoon</label>
@@ -54,12 +54,13 @@
         </label>
 
         <div class="actions">
-          <button type="submit">Save</button>
+          <button type="submit">Save now</button>
           <button id="health-check" type="button">Check server</button>
           <button id="export-settings" type="button">Export settings</button>
           <button id="import-settings" type="button">Import settings</button>
           <input id="import-settings-file" type="file" accept="application/json" hidden>
         </div>
+        <p class="form-hint">Changes save automatically when you leave a field.</p>
       </form>
 
       <p id="status" role="status" aria-live="polite"></p>
