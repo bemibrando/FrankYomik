@@ -52,6 +52,9 @@ _NO_MASK_TIGHTEN_MIN_AREA_PX = 400
 # (chapter title strips, narration banners) and render the new furigana glyphs
 # left-to-right instead of in vertical columns.
 _WIDE_BBOX_HORIZONTAL_RATIO = 2.5
+# Minimum padding when expanding bbox to the mask's bounding rect — keeps
+# small detections from being limited to no expansion at all.
+_MASK_UNION_MIN_PAD = 6
 _FURIGANA_EXPANDED_MAX_FONT_RATIO = 1.15
 _FURIGANA_EXPANDED_MAX_FONT_EXTRA = 4
 _FURIGANA_SOURCE_MAX_FONT_RATIO = 1.15
@@ -198,8 +201,31 @@ def _mask_safe_bbox(bbox: tuple[int, int, int, int],
     percentile span because Japanese text stacks characters individually and the
     rendered overlay is still clipped by the mask. This helps soft/stylized
     bubbles use more of their available interior without drawing outside them.
+
+    The detector bbox can be tight around the inner text strokes while the
+    bubble (mask) extends further out — common for stylized bubbles with
+    spikes or curved edges. Union the bbox with the mask's bounding rect so
+    the font fitter sees the full available interior; the alpha-clip at the
+    end of rendering still confines glyphs to the actual mask.
     """
     x1, y1, x2, y2 = bbox
+    h_full, w_full = mask.shape[:2]
+    ys_all, xs_all = np.where(mask > 0)
+    if len(ys_all) >= 4:
+        mx1 = max(0, int(xs_all.min()))
+        my1 = max(0, int(ys_all.min()))
+        mx2 = min(w_full, int(xs_all.max()) + 1)
+        my2 = min(h_full, int(ys_all.max()) + 1)
+        # Cap how far we expand past the detector bbox so a misextracted mask
+        # can't drag layout into adjacent panels.
+        bw = max(1, x2 - x1)
+        bh = max(1, y2 - y1)
+        max_pad_x = max(_MASK_UNION_MIN_PAD, bw // 3)
+        max_pad_y = max(_MASK_UNION_MIN_PAD, bh // 3)
+        x1 = max(min(x1, mx1), x1 - max_pad_x)
+        y1 = max(min(y1, my1), y1 - max_pad_y)
+        x2 = min(max(x2, mx2), x2 + max_pad_x)
+        y2 = min(max(y2, my2), y2 + max_pad_y)
     crop = mask[y1:y2, x1:x2]
     h, w = crop.shape[:2]
     if h < 4 or w < 4:
