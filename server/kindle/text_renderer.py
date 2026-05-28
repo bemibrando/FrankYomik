@@ -34,6 +34,8 @@ _BRIGHT_REGION_MAX_HEIGHT_EXTRA = 120
 _BRIGHT_REGION_MIN_AREA_GAIN = 1.15
 _BRIGHT_REGION_MAX_BORDER_HOLE_RATIO = 0.015
 _BRIGHT_REGION_MAX_BORDER_HOLE_PIXELS = 24
+_FURIGANA_EXPANDED_MAX_FONT_RATIO = 1.30
+_FURIGANA_EXPANDED_MAX_FONT_EXTRA = 8
 
 log = logging.getLogger(__name__)
 
@@ -574,8 +576,10 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
     if not chars:
         return
 
+    original_font_size = None
     if mask is None:
         initial_font_size = _fit_vertical_font_size(chars, bw, bh)
+        original_font_size = initial_font_size
         bbox = _expand_bright_region_bbox(
             img,
             bbox,
@@ -588,6 +592,11 @@ def render_furigana_vertical(img: Image.Image, bbox: tuple[int, int, int, int],
             return
 
     font_size = _fit_vertical_font_size(chars, bw, bh)
+    if original_font_size is not None:
+        font_size = _cap_expanded_furigana_font_size(
+            font_size,
+            original_font_size,
+        )
     furi_size = _furigana_font_size(font_size)
 
     font = _load_font(FONT_JP, font_size)
@@ -750,6 +759,21 @@ def _fit_vertical_font_size(chars: list[dict], bw: int, bh: int) -> int:
 def _furigana_font_size(font_size: int) -> int:
     """Return furigana font size for a fitted main Japanese font size."""
     return max(MIN_FONT_SIZE, int(font_size * FURIGANA_SIZE_RATIO))
+
+
+def _cap_expanded_furigana_font_size(fitted_size: int,
+                                     original_size: int) -> int:
+    """Keep no-mask bright-region expansion near the original text scale.
+
+    The detector bbox is our best rough measure of the source glyph size.  It is
+    OK for caption/glow whitespace to make furigana a bit larger, but open white
+    art or page margins must not turn normal narration into huge headline text.
+    """
+    if fitted_size <= original_size:
+        return fitted_size
+    ratio_cap = int(round(original_size * _FURIGANA_EXPANDED_MAX_FONT_RATIO))
+    extra_cap = original_size + _FURIGANA_EXPANDED_MAX_FONT_EXTRA
+    return max(MIN_FONT_SIZE, min(fitted_size, ratio_cap, extra_cap))
 
 
 @lru_cache(maxsize=128)

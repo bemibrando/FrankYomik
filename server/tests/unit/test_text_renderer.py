@@ -7,6 +7,7 @@ from kindle.text_renderer import (
     _word_wrap,
     _break_word_to_fit,
     _choose_layout,
+    _cap_expanded_furigana_font_size,
     _furigana_font_size,
     _fit_vertical_font_size,
     _fit_furigana_stack,
@@ -101,6 +102,15 @@ class TestFuriganaSizing:
                                          count=2)
         assert size <= 14
         assert cell * 2 <= main_cell
+
+    def test_expanded_furigana_caps_near_original_text_scale(self):
+        # Bright whitespace can improve cramped no-mask captions, but should not
+        # turn normal narration into oversized headline text.
+        assert _cap_expanded_furigana_font_size(40, 20) == 26
+        assert _cap_expanded_furigana_font_size(60, 30) == 38
+
+    def test_expanded_furigana_cap_does_not_force_growth(self):
+        assert _cap_expanded_furigana_font_size(18, 20) == 18
 
 
 class TestMaskSafeBBox:
