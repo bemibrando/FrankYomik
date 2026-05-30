@@ -26,18 +26,32 @@ const DB_NAME = 'frank-yomik-extension';
 const DB_VERSION = 1;
 const IMAGE_STORE = 'images';
 
+// WebSocket job-completion delivery. The server's /api/v1/ws endpoint pushes
+// `job_complete` notifications as soon as the worker finishes — eliminating
+// the 0-3s tail the polling loop adds on top of per-job work. Polling stays
+// as a fallback for SW restarts and dropped sockets.
+const WS_BACKOFF_INITIAL_MS = 1_000;
+const WS_BACKOFF_MAX_MS = 30_000;
+
 let pollTimer = null;
+let ws = null;
+let wsState = 'closed'; // 'closed' | 'connecting' | 'open'
+let wsReconnectTimer = null;
+let wsBackoffMs = WS_BACKOFF_INITIAL_MS;
+let wsApiBase = '';
 
 restrictStorageAccess();
 
 chrome.runtime.onInstalled.addListener(() => {
   restrictStorageAccess();
   ensurePollingAlarm();
+  manageWebSocketLifecycle().catch((error) => console.warn('[Frank] ws lifecycle failed on install:', error));
 });
 
 chrome.runtime.onStartup.addListener(() => {
   restrictStorageAccess();
   ensurePollingAlarm();
+  manageWebSocketLifecycle().catch((error) => console.warn('[Frank] ws lifecycle failed on startup:', error));
 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -189,6 +203,10 @@ async function saveSettings(rawSettings) {
     }
   }
   await chrome.storage.local.set({ [STORAGE_KEYS.settings]: settings });
+  // API base URL / token may have changed — drop any existing socket so the
+  // next ensure picks up the new credentials.
+  closeWebSocket();
+  manageWebSocketLifecycle().catch((error) => console.warn('[Frank] ws lifecycle after save failed:', error));
   return { ok: true, settings };
 }
 
@@ -414,6 +432,9 @@ async function queueJobRecord({ response, sender, pageId, site, sourceHash, pipe
   await saveActiveJobs(jobs);
   await recordEvent({ site, level: 'info', message: `Queued ${site} job ${jobId} for ${pageId}` });
   schedulePollSoon();
+  // Wake the socket if needed and subscribe immediately so we don't miss the
+  // notification for fast-completing jobs.
+  ensureWebSocket().then(() => subscribeJob(jobId)).catch((error) => console.warn('[Frank] ws ensure failed:', error));
   return { ok: true, status: 'queued', pageId, site, jobId, sourceHash, pipeline, capture };
 }
 
@@ -501,7 +522,14 @@ async function pollActiveJobs() {
   if (!settings.apiBaseUrl || !settings.authToken) return;
   const jobs = await loadActiveJobs();
   const entries = Object.values(jobs);
-  if (!entries.length) return;
+  if (!entries.length) {
+    await manageWebSocketLifecycle();
+    return;
+  }
+
+  // Keep WS subscriptions in sync with whatever the SW believes is active —
+  // a no-op when the socket is already open and current.
+  await ensureWebSocket(settings).catch(() => {});
 
   let changed = false;
   await recordEvent({ site: 'extension', level: 'info', message: `Polling ${entries.length} active job(s)` });
@@ -521,26 +549,12 @@ async function pollActiveJobs() {
       changed = true;
       await recordEvent({ site: job.site, level: 'info', message: `Job ${job.jobId} status: ${status.status || 'unknown'}` });
       if (status.status === 'completed') {
-        const imageUrl = status.image_url || `/api/v1/jobs/${encodeURIComponent(job.jobId)}/image`;
-        const imageDataUrl = await downloadImageDataUrl(settings, imageUrl);
-        await cachePut(job.cacheKey, imageDataUrl, {
-          sourceHash: status.source_hash || job.sourceHash,
-          pipeline: job.cachePipeline,
-          targetLanguage: settings.targetLanguage,
+        const ok = await finalizeJobCompletion(settings, job, jobs, recordId, {
+          imageUrl: status.image_url,
+          sourceHash: status.source_hash,
+          source: 'poll',
         });
-        delete jobs[recordId];
-        changed = true;
-        await recordEvent({ site: job.site, level: 'info', message: `Completed ${job.site} job ${job.jobId}` });
-        await notifyTab(job, {
-          type: 'FRANK_JOB_COMPLETE',
-          pageId: job.pageId,
-          site: job.site,
-          jobId: job.jobId,
-          sourceHash: status.source_hash || job.sourceHash,
-          imageUrl,
-          imageDataUrl,
-          capture: job.capture,
-        });
+        if (ok) changed = true;
       } else if (status.status === 'failed') {
         delete jobs[recordId];
         changed = true;
@@ -561,6 +575,198 @@ async function pollActiveJobs() {
 
   if (changed) await saveActiveJobs(jobs);
   if (Object.keys(jobs).length) schedulePollSoon();
+  await manageWebSocketLifecycle();
+}
+
+// Download the result, cache it, drop the job record, and notify the tab.
+// Shared between the poll loop and WebSocket notifications so both paths are
+// idempotent — first writer wins and the loser becomes a cheap no-op.
+async function finalizeJobCompletion(settings, job, jobsMap, recordId, { imageUrl, sourceHash, source }) {
+  if (!jobsMap[recordId]) return false;
+  const url = imageUrl || `/api/v1/jobs/${encodeURIComponent(job.jobId)}/image`;
+  try {
+    const imageDataUrl = await downloadImageDataUrl(settings, url);
+    await cachePut(job.cacheKey, imageDataUrl, {
+      sourceHash: sourceHash || job.sourceHash,
+      pipeline: job.cachePipeline,
+      targetLanguage: settings.targetLanguage,
+    });
+    delete jobsMap[recordId];
+    await recordEvent({ site: job.site, level: 'info', message: `Completed ${job.site} job ${job.jobId} (${source})` });
+    await notifyTab(job, {
+      type: 'FRANK_JOB_COMPLETE',
+      pageId: job.pageId,
+      site: job.site,
+      jobId: job.jobId,
+      sourceHash: sourceHash || job.sourceHash,
+      imageUrl: url,
+      imageDataUrl,
+      capture: job.capture,
+    });
+    return true;
+  } catch (error) {
+    console.warn(`[Frank] finalize failed for ${job.jobId}:`, error);
+    await recordEvent({ site: job.site, level: 'error', message: `Finalize failed for ${job.jobId}: ${error.message || error}` });
+    return false;
+  }
+}
+
+// --- WebSocket job-completion delivery ---
+
+async function ensureWebSocket(settingsHint) {
+  const jobs = await loadActiveJobs();
+  if (!Object.keys(jobs).length) {
+    closeWebSocket();
+    return;
+  }
+  if (wsState !== 'closed') return;
+
+  const settings = settingsHint || (await getSettings());
+  if (!settings.apiBaseUrl || !settings.authToken) return;
+
+  let url;
+  try {
+    url = buildWsUrl(settings);
+  } catch (error) {
+    console.warn('[Frank] could not build ws url:', error);
+    return;
+  }
+
+  wsApiBase = settings.apiBaseUrl;
+  wsState = 'connecting';
+  try {
+    ws = new WebSocket(url);
+  } catch (error) {
+    console.warn('[Frank] ws construct failed:', error);
+    ws = null;
+    wsState = 'closed';
+    scheduleWsReconnect();
+    return;
+  }
+
+  ws.addEventListener('open', () => {
+    wsState = 'open';
+    wsBackoffMs = WS_BACKOFF_INITIAL_MS;
+    subscribeAllActiveJobs().catch((error) => console.warn('[Frank] ws subscribe failed:', error));
+  });
+  ws.addEventListener('message', (event) => {
+    handleWsMessage(event).catch((error) => console.warn('[Frank] ws handler failed:', error));
+  });
+  ws.addEventListener('close', () => onWsClose());
+  ws.addEventListener('error', () => {
+    // The close event will follow and trigger reconnect.
+  });
+}
+
+function buildWsUrl(settings) {
+  const base = new URL(settings.apiBaseUrl);
+  base.protocol = base.protocol === 'https:' ? 'wss:' : 'ws:';
+  const path = base.pathname.replace(/\/+$/, '');
+  base.pathname = `${path}/api/v1/ws`;
+  base.searchParams.set('token', settings.authToken);
+  return base.toString();
+}
+
+async function subscribeAllActiveJobs() {
+  if (wsState !== 'open' || !ws) return;
+  const jobs = await loadActiveJobs();
+  const jobIds = Array.from(new Set(Object.values(jobs).map((j) => j.jobId).filter(Boolean)));
+  if (!jobIds.length) return;
+  try {
+    ws.send(JSON.stringify({ type: 'subscribe', job_ids: jobIds }));
+  } catch (error) {
+    console.warn('[Frank] ws subscribe send failed:', error);
+  }
+}
+
+function subscribeJob(jobId) {
+  if (!jobId || wsState !== 'open' || !ws) return;
+  try {
+    ws.send(JSON.stringify({ type: 'subscribe', job_ids: [jobId] }));
+  } catch (error) {
+    console.warn('[Frank] ws subscribe send failed:', error);
+  }
+}
+
+function closeWebSocket() {
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
+  }
+  if (ws) {
+    try { ws.close(1000); } catch { /* ignore */ }
+    ws = null;
+  }
+  wsState = 'closed';
+  wsBackoffMs = WS_BACKOFF_INITIAL_MS;
+}
+
+function onWsClose() {
+  ws = null;
+  wsState = 'closed';
+  scheduleWsReconnect();
+}
+
+function scheduleWsReconnect() {
+  if (wsReconnectTimer) return;
+  const delay = wsBackoffMs;
+  wsBackoffMs = Math.min(wsBackoffMs * 2, WS_BACKOFF_MAX_MS);
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null;
+    ensureWebSocket().catch((error) => console.warn('[Frank] ws reconnect failed:', error));
+  }, delay);
+}
+
+async function handleWsMessage(event) {
+  let payload;
+  try {
+    payload = JSON.parse(typeof event.data === 'string' ? event.data : '');
+  } catch {
+    return;
+  }
+  if (!payload || payload.type !== 'job_complete') return;
+  const jobId = String(payload.job_id || '');
+  if (!jobId) return;
+
+  const settings = await getSettings();
+  if (!settings.apiBaseUrl || !settings.authToken) return;
+
+  const jobs = await loadActiveJobs();
+  const recordId = Object.keys(jobs).find((k) => jobs[k].jobId === jobId);
+  if (!recordId) return;
+  const job = jobs[recordId];
+
+  if (payload.status === 'completed') {
+    const ok = await finalizeJobCompletion(settings, job, jobs, recordId, {
+      imageUrl: payload.image_url,
+      sourceHash: payload.source_hash,
+      source: 'ws',
+    });
+    if (ok) await saveActiveJobs(jobs);
+  } else if (payload.status === 'failed') {
+    delete jobs[recordId];
+    await saveActiveJobs(jobs);
+    await recordEvent({ site: job.site, level: 'error', message: `Failed ${job.site} job ${job.jobId} (ws): ${payload.error || 'Job failed'}` });
+    await notifyTab(job, {
+      type: 'FRANK_JOB_FAILED',
+      pageId: job.pageId,
+      site: job.site,
+      jobId: job.jobId,
+      error: payload.error || 'Job failed',
+    });
+  }
+
+  await manageWebSocketLifecycle();
+}
+
+async function manageWebSocketLifecycle() {
+  const settings = await getSettings();
+  // API URL changed (user reconfigured) → tear down so the next ensure picks
+  // the new base.
+  if (wsApiBase && settings.apiBaseUrl && wsApiBase !== settings.apiBaseUrl) {
+    closeWebSocket();
+  }
+  await ensureWebSocket(settings);
 }
 
 async function notifyTab(job, message) {

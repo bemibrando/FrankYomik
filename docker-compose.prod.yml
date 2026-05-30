@@ -48,7 +48,11 @@ services:
 
   worker:
     image: localhost:3007/akitaonrails/frank-yomik-worker-rocm:latest
-    container_name: yomik-worker
+    # container_name omitted so docker compose can spin multiple replicas.
+    # Each replica gets a unique hostname which the worker uses as its
+    # Redis Streams consumer name.
+    deploy:
+      replicas: 2
     environment:
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://192.168.0.90:11434}
       APP_UID: ${APP_UID:-1026}

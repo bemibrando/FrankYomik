@@ -2,6 +2,8 @@
 
 import argparse
 import logging
+import os
+import socket
 
 from kindle.config import _load_yaml_config
 from .consumer import Consumer
@@ -50,9 +52,19 @@ def main() -> None:
 
     cache_dir = worker_cfg.get("cache_dir", "./cache")
 
+    # Stream consumer names must be unique within the group; with multiple
+    # replicas the container's hostname (set by docker compose) gives us that.
+    # CONSUMER_NAME can override for tests.
+    consumer_name = (
+        os.environ.get("CONSUMER_NAME")
+        or socket.gethostname()
+        or None
+    )
+
     consumer = Consumer(
         redis_url=redis_url,
         consumer_group=consumer_group,
+        consumer_name=consumer_name,
         heartbeat_interval=heartbeat_interval,
         job_timeout=job_timeout,
         cache_dir=cache_dir,
