@@ -34,9 +34,14 @@ log = logging.getLogger(__name__)
 
 
 def _find_images(prefix: str) -> list[str]:
-    """Find all docs/{prefix}*.png files, sorted by name."""
-    pattern = os.path.join(DOCS_DIR, f"{prefix}*.png")
-    return sorted(glob.glob(pattern))
+    image_dir = os.path.join(DOCS_DIR, prefix)
+    patterns = ("*.png", "*.jpg", "*.jpeg")
+
+    files = []
+    for pattern in patterns:
+        files.extend(glob.glob(os.path.join(image_dir, pattern)))
+
+    return sorted(files)
 
 
 def _process_page(path: str, mode: PipelineMode,
