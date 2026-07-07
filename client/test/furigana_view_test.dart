@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -29,9 +28,14 @@ FuriganaPageMeta _meta() => FuriganaPageMeta.parse('''
 
 void main() {
   testWidgets('renders furigana reading over a bubble', (tester) async {
-    final tmp = await Directory.systemTemp.createTemp('furi_view');
-    final repo = VocabRepository(file: File('${tmp.path}/v.json'));
-    await repo.load();
+    // Real filesystem I/O must run outside the fake-async test zone, or the
+    // awaited dart:io futures never complete and the test hangs.
+    late final VocabRepository repo;
+    await tester.runAsync(() async {
+      final tmp = await Directory.systemTemp.createTemp('furi_view');
+      repo = VocabRepository(file: File('${tmp.path}/v.json'));
+      await repo.load();
+    });
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -49,9 +53,12 @@ void main() {
 
   testWidgets('tap word opens focus panel; mark known hides furigana',
       (tester) async {
-    final tmp = await Directory.systemTemp.createTemp('furi_view');
-    final repo = VocabRepository(file: File('${tmp.path}/v.json'));
-    await repo.load();
+    late final VocabRepository repo;
+    await tester.runAsync(() async {
+      final tmp = await Directory.systemTemp.createTemp('furi_view');
+      repo = VocabRepository(file: File('${tmp.path}/v.json'));
+      await repo.load();
+    });
     await tester.pumpWidget(
       ProviderScope(
         overrides: [

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -176,9 +177,12 @@ class _FocusPanelState extends State<_FocusPanel> {
             decoration: const InputDecoration(
               labelText: 'Reading (your override)',
             ),
-            onSubmitted: (value) async {
-              await widget.repo.setReadingOverride(widget.segment.text, value);
-              if (context.mounted) Navigator.pop(context);
+            onSubmitted: (value) {
+              // Update in memory + notify synchronously, then close; the disk
+              // write persists in the background (best-effort in the repo).
+              unawaited(
+                  widget.repo.setReadingOverride(widget.segment.text, value));
+              Navigator.pop(context);
             },
           ),
           const SizedBox(height: 12),
@@ -186,18 +190,18 @@ class _FocusPanelState extends State<_FocusPanel> {
             children: [
               ElevatedButton(
                 key: const ValueKey('vocab-mark-known'),
-                onPressed: () async {
-                  await widget.repo.setKnown(widget.segment.text, !known);
-                  if (context.mounted) Navigator.pop(context);
+                onPressed: () {
+                  unawaited(widget.repo.setKnown(widget.segment.text, !known));
+                  Navigator.pop(context);
                 },
                 child: Text(known ? 'Mark as unknown' : 'I know this word'),
               ),
               const SizedBox(width: 12),
               TextButton(
-                onPressed: () async {
-                  await widget.repo
-                      .setReadingOverride(widget.segment.text, _controller.text);
-                  if (context.mounted) Navigator.pop(context);
+                onPressed: () {
+                  unawaited(widget.repo.setReadingOverride(
+                      widget.segment.text, _controller.text));
+                  Navigator.pop(context);
                 },
                 child: const Text('Save reading'),
               ),
