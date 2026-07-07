@@ -62,3 +62,64 @@ FuriganaDisplay resolveFurigana(FuriganaSegment segment, VocabEntry? entry) {
     known: false,
   );
 }
+
+/// One character (or an unsplittable kanji run) with its own furigana, used to
+/// stack characters vertically with ruby beside each kanji.
+class RubyUnit {
+  final String base;
+  final String? furigana;
+  const RubyUnit(this.base, this.furigana);
+}
+
+bool _isKana(int rune) => rune >= 0x3040 && rune <= 0x30FF;
+
+/// Splits a word + its reading into per-character ruby units so vertical text
+/// can stack each character with its own reading. Kana already present in the
+/// base act as anchors to align the reading (e.g. 抜け出 / ぬけだ ->
+/// 抜=ぬ, け, 出=だ). A kanji run whose length doesn't match its reading is
+/// kept grouped (e.g. 一人 / ひとり stays together).
+List<RubyUnit> distributeRuby(String base, String? reading) {
+  final b = base.runes.toList();
+  if (reading == null || reading.isEmpty) {
+    return [for (final r in b) RubyUnit(String.fromCharCode(r), null)];
+  }
+  final rd = reading.runes.toList();
+  final units = <RubyUnit>[];
+  var i = 0, j = 0;
+  while (i < b.length) {
+    if (_isKana(b[i])) {
+      if (j < rd.length && rd[j] == b[i]) j++; // consume the matching kana
+      units.add(RubyUnit(String.fromCharCode(b[i]), null));
+      i++;
+      continue;
+    }
+    // A run of consecutive kanji; its reading runs up to the next kana anchor.
+    final start = i;
+    while (i < b.length && !_isKana(b[i])) {
+      i++;
+    }
+    final run = b.sublist(start, i);
+    int k;
+    if (i < b.length) {
+      final anchor = b[i];
+      k = j;
+      while (k < rd.length && rd[k] != anchor) {
+        k++;
+      }
+    } else {
+      k = rd.length;
+    }
+    final runReading = rd.sublist(j, k);
+    j = k;
+    if (run.length == runReading.length) {
+      for (var m = 0; m < run.length; m++) {
+        units.add(RubyUnit(
+            String.fromCharCode(run[m]), String.fromCharCode(runReading[m])));
+      }
+    } else {
+      units.add(RubyUnit(String.fromCharCodes(run),
+          runReading.isEmpty ? null : String.fromCharCodes(runReading)));
+    }
+  }
+  return units;
+}

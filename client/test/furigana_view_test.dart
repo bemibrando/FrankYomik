@@ -18,7 +18,7 @@ FuriganaPageMeta _meta() => FuriganaPageMeta.parse('''
 {
   "image": {"width": 100, "height": 100},
   "regions": [
-    {"id": "r1", "bbox_norm": [0.1, 0.1, 0.9, 0.9],
+    {"id": "r1", "bbox_norm": [0.1, 0.45, 0.9, 0.55],
      "transformed": {"kind": "furigana_segments", "value": [
        {"text": "食べ", "furigana": "たべ", "needs_furigana": true},
        {"text": "る", "furigana": null, "needs_furigana": false}

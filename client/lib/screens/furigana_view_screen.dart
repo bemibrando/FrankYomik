@@ -167,8 +167,12 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
     // the source size and wraps like it.
     final scale =
         widget.meta.imageHeight > 0 ? h / widget.meta.imageHeight : 1.0;
-    final fontSize =
-        ((region.sourceFontSize ?? 16.0) * scale).clamp(9.0, 200.0).toDouble();
+    final rawFont = (region.sourceFontSize ?? 16.0) * scale;
+    // Cap so a bubble's text can't overflow its box (which would clip tap
+    // targets): horizontal rows are ~1.7x font tall, vertical columns ~1.5x
+    // font wide.
+    final cap = vertical ? rw / 1.5 : rh / 1.7;
+    final fontSize = rawFont.clamp(9.0, cap < 9.0 ? 9.0 : cap).toDouble();
     return Positioned(
       left: region.bboxNorm[0] * w,
       top: region.bboxNorm[1] * h,
@@ -226,16 +230,55 @@ class _RegionOverlay extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    final words = <Widget>[
-      for (var i = 0; i < region.segments.length; i++)
-        FuriganaWord(
-          display: displays[i],
-          fontSize: fontSize,
-          onTap: region.segments[i].needsFurigana
-              ? () => onWordTap(region.segments[i])
-              : null,
-        ),
-    ];
+    final Widget content;
+    if (vertical) {
+      // Vertical text: stack each character, with its furigana beside the
+      // kanji, flowing into right-to-left columns.
+      final units = <Widget>[];
+      for (var s = 0; s < region.segments.length; s++) {
+        final seg = region.segments[s];
+        for (final u in distributeRuby(displays[s].baseText, displays[s].reading)) {
+          Widget w =
+              _VerticalRuby(base: u.base, furigana: u.furigana, fontSize: fontSize);
+          if (seg.needsFurigana) {
+            w = GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => onWordTap(seg),
+              child: w,
+            );
+          }
+          units.add(w);
+        }
+      }
+      content = Wrap(
+        direction: Axis.vertical,
+        textDirection: TextDirection.rtl, // columns run right-to-left
+        alignment: WrapAlignment.start,
+        runAlignment: WrapAlignment.center,
+        crossAxisAlignment: WrapCrossAlignment.start,
+        spacing: 1,
+        runSpacing: 4,
+        children: units,
+      );
+    } else {
+      content = Wrap(
+        alignment: WrapAlignment.center,
+        runAlignment: WrapAlignment.center,
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 3,
+        runSpacing: 1,
+        children: [
+          for (var i = 0; i < region.segments.length; i++)
+            FuriganaWord(
+              display: displays[i],
+              fontSize: fontSize,
+              onTap: region.segments[i].needsFurigana
+                  ? () => onWordTap(region.segments[i])
+                  : null,
+            ),
+        ],
+      );
+    }
 
     // A translucent panel behind the reading so the furigana + base text stay
     // legible over any artwork.
@@ -246,19 +289,55 @@ class _RegionOverlay extends StatelessWidget {
       ),
       padding: const EdgeInsets.all(2),
       alignment: Alignment.center,
-      child: ClipRect(
-        child: Wrap(
-          direction: vertical ? Axis.vertical : Axis.horizontal,
-          // rtl makes vertical text wrap into right-to-left columns.
-          textDirection: vertical ? TextDirection.rtl : TextDirection.ltr,
-          alignment: WrapAlignment.center,
-          runAlignment: WrapAlignment.center,
-          crossAxisAlignment: WrapCrossAlignment.center,
-          spacing: vertical ? 2 : 3,
-          runSpacing: vertical ? 3 : 1,
-          children: words,
+      child: ClipRect(child: content),
+    );
+  }
+}
+
+/// A single vertically-stacked character with its furigana to the right
+/// (縦書き ruby). For a grouped kanji run, base chars stack and the reading
+/// stacks beside them.
+class _VerticalRuby extends StatelessWidget {
+  const _VerticalRuby({
+    required this.base,
+    required this.furigana,
+    required this.fontSize,
+  });
+
+  final String base;
+  final String? furigana;
+  final double fontSize;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget column(String s, TextStyle style) => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final r in s.runes)
+              Text(String.fromCharCode(r), style: style),
+          ],
+        );
+
+    final baseCol = column(
+      base,
+      TextStyle(fontSize: fontSize, height: 1.0, color: Colors.white),
+    );
+    if (furigana == null) return baseCol;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        baseCol,
+        column(
+          furigana!,
+          TextStyle(
+            fontSize: fontSize * 0.5,
+            height: 1.0,
+            color: Colors.amberAccent,
+            fontWeight: FontWeight.w700,
+          ),
         ),
-      ),
+      ],
     );
   }
 }

@@ -57,4 +57,26 @@ void main() {
       expect(d.known, true);
     });
   });
+
+  group('distributeRuby', () {
+    List<(String, String?)> pairs(String base, String? reading) =>
+        distributeRuby(base, reading).map((u) => (u.base, u.furigana)).toList();
+
+    test('anchors on kana in the base (抜け出 / ぬけだ)', () {
+      expect(pairs('抜け出', 'ぬけだ'),
+          [('抜', 'ぬ'), ('け', null), ('出', 'だ')]);
+    });
+
+    test('splits an all-kanji run 1:1 (意味 / いみ)', () {
+      expect(pairs('意味', 'いみ'), [('意', 'い'), ('味', 'み')]);
+    });
+
+    test('keeps a kanji run grouped when lengths differ (一人 / ひとり)', () {
+      expect(pairs('一人', 'ひとり'), [('一人', 'ひとり')]);
+    });
+
+    test('no reading => each character bare', () {
+      expect(pairs('する', null), [('す', null), ('る', null)]);
+    });
+  });
 }
