@@ -72,6 +72,9 @@ void main() {
     await tester.pump();
 
     await tester.tap(find.text('食べ'));
+    // A single tap's action is deferred until the double-tap window closes
+    // (the bubble also listens for double-tap to hide/show).
+    await tester.pump(const Duration(milliseconds: 350));
     await tester.pumpAndSettle();
     // Panel exposes a "known" toggle button.
     expect(find.byKey(const ValueKey('vocab-mark-known')), findsOneWidget);
@@ -85,4 +88,41 @@ void main() {
     expect(find.text('食べ'), findsNothing);
     expect(repo.entryFor('食べ')!.known, true);
   });
+
+  testWidgets('double-tap hides the bubble, again reveals it', (tester) async {
+    late final VocabRepository repo;
+    await tester.runAsync(() async {
+      final tmp = await Directory.systemTemp.createTemp('furi_view');
+      repo = VocabRepository(file: File('${tmp.path}/v.json'));
+      await repo.load();
+    });
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          vocabRepositoryProvider.overrideWith((ref) => repo),
+        ],
+        child: MaterialApp(
+          home: FuriganaView(meta: _meta(), imageBytes: _png),
+        ),
+      ),
+    );
+    await tester.pump();
+    final at = tester.getCenter(find.text('食べ'));
+    expect(find.text('たべ'), findsOneWidget); // shown
+
+    await _doubleTapAt(tester, at);
+    await tester.pumpAndSettle();
+    expect(find.text('たべ'), findsNothing); // hidden by double-tap
+
+    await _doubleTapAt(tester, at);
+    await tester.pumpAndSettle();
+    expect(find.text('たべ'), findsOneWidget); // revealed again
+  });
+}
+
+Future<void> _doubleTapAt(WidgetTester tester, Offset location) async {
+  await tester.tapAt(location);
+  await tester.pump(const Duration(milliseconds: 50));
+  await tester.tapAt(location);
+  await tester.pump();
 }

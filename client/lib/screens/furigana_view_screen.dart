@@ -53,6 +53,24 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
   double _overscroll = 0;
   static const double _pageFlipThreshold = 160;
 
+  // Bubbles the reader double-tapped to hide (reset when the page changes).
+  final Set<String> _hiddenRegions = {};
+
+  @override
+  void didUpdateWidget(covariant FuriganaView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.meta, widget.meta)) {
+      _hiddenRegions.clear();
+      _overscroll = 0;
+    }
+  }
+
+  void _toggleRegion(String id) {
+    setState(() {
+      if (!_hiddenRegions.add(id)) _hiddenRegions.remove(id);
+    });
+  }
+
   @override
   void dispose() {
     _controller.dispose();
@@ -157,10 +175,33 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
   }
 
   /// Positions one bubble's overlay and derives its orientation + text size.
+  /// Double-tapping a bubble hides its overlay (revealing the original art);
+  /// double-tapping the same spot again brings it back.
   Widget _positionedOverlay(BuildContext context, FuriganaRegion region,
       double w, double h, VocabRepository repo) {
     final baseW = (region.bboxNorm[2] - region.bboxNorm[0]) * w;
     final baseH = (region.bboxNorm[3] - region.bboxNorm[1]) * h;
+
+    // Nothing to read (every word known) — no overlay, no tap target.
+    final hasFurigana = region.segments
+        .any((s) => resolveFurigana(s, repo.entryFor(s.text)).reading != null);
+    if (!hasFurigana) return const SizedBox.shrink();
+
+    // Double-tapped hidden: a transparent target over the bubble so a second
+    // double-tap reveals it again.
+    if (_hiddenRegions.contains(region.id)) {
+      return Positioned(
+        left: region.bboxNorm[0] * w,
+        top: region.bboxNorm[1] * h,
+        width: baseW,
+        height: baseH,
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onDoubleTap: () => _toggleRegion(region.id),
+        ),
+      );
+    }
+
     // Vertical (縦書き) when the bubble is taller than wide; horizontal
     // otherwise (e.g. wide caption/title text).
     final vertical = baseH >= baseW;
@@ -181,13 +222,19 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
     return Positioned.fill(
       child: CustomSingleChildLayout(
         delegate: _BubbleBoxLayout(center: Offset(cx, cy), margin: 6),
-        child: _RegionOverlay(
-          region: region,
-          repo: repo,
-          vertical: vertical,
-          fontSize: fontSize,
-          wrapExtent: wrapExtent,
-          onWordTap: (seg) => _openFocusPanel(context, repo, seg),
+        // Double-tap toggles this bubble; single taps fall through to the
+        // words (mark-known / override).
+        child: GestureDetector(
+          behavior: HitTestBehavior.deferToChild,
+          onDoubleTap: () => _toggleRegion(region.id),
+          child: _RegionOverlay(
+            region: region,
+            repo: repo,
+            vertical: vertical,
+            fontSize: fontSize,
+            wrapExtent: wrapExtent,
+            onWordTap: (seg) => _openFocusPanel(context, repo, seg),
+          ),
         ),
       ),
     );
