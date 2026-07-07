@@ -29,11 +29,13 @@ class FuriganaRegion {
   final String id;
   final List<double> bboxNorm; // [x1, y1, x2, y2], each 0..1
   final List<FuriganaSegment> segments;
+  final double? sourceFontSize; // original text height in px, if known
 
   const FuriganaRegion({
     required this.id,
     required this.bboxNorm,
     required this.segments,
+    this.sourceFontSize,
   });
 
   static FuriganaRegion? fromJson(Map<String, dynamic> json) {
@@ -61,10 +63,12 @@ class FuriganaRegion {
       }
     }
     if (segs.isEmpty) return null;
+    final rawFont = json['source_font_size'];
     return FuriganaRegion(
       id: json['id']?.toString() ?? '',
       bboxNorm: box,
       segments: segs,
+      sourceFontSize: rawFont is num ? rawFont.toDouble() : null,
     );
   }
 }

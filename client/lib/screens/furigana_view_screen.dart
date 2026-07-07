@@ -143,19 +143,7 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
                             Image.memory(widget.imageBytes, fit: BoxFit.fill),
                       ),
                       for (final region in meta.regions)
-                        Positioned(
-                          left: region.bboxNorm[0] * w,
-                          top: region.bboxNorm[1] * h,
-                          width: (region.bboxNorm[2] - region.bboxNorm[0]) * w,
-                          height:
-                              (region.bboxNorm[3] - region.bboxNorm[1]) * h,
-                          child: _RegionOverlay(
-                            region: region,
-                            repo: repo,
-                            onWordTap: (seg) =>
-                                _openFocusPanel(context, repo, seg),
-                          ),
-                        ),
+                        _positionedOverlay(context, region, w, h, repo),
                     ],
                   ),
                 ),
@@ -163,6 +151,35 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
             ),
           );
         },
+      ),
+    );
+  }
+
+  /// Positions one bubble's overlay and derives its orientation + text size.
+  Widget _positionedOverlay(BuildContext context, FuriganaRegion region,
+      double w, double h, VocabRepository repo) {
+    final rw = (region.bboxNorm[2] - region.bboxNorm[0]) * w;
+    final rh = (region.bboxNorm[3] - region.bboxNorm[1]) * h;
+    // Vertical (縦書き) when the bubble is taller than wide; horizontal
+    // otherwise (e.g. wide caption/title text).
+    final vertical = rh >= rw;
+    // Scale the original font to the on-screen page so the overlay matches
+    // the source size and wraps like it.
+    final scale =
+        widget.meta.imageHeight > 0 ? h / widget.meta.imageHeight : 1.0;
+    final fontSize =
+        ((region.sourceFontSize ?? 16.0) * scale).clamp(9.0, 200.0).toDouble();
+    return Positioned(
+      left: region.bboxNorm[0] * w,
+      top: region.bboxNorm[1] * h,
+      width: rw,
+      height: rh,
+      child: _RegionOverlay(
+        region: region,
+        repo: repo,
+        vertical: vertical,
+        fontSize: fontSize,
+        onWordTap: (seg) => _openFocusPanel(context, repo, seg),
       ),
     );
   }
@@ -179,17 +196,23 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
   }
 }
 
-/// Lays out one bubble's segments as tappable furigana words.
+/// Lays out one bubble's segments as tappable furigana words. Words flow in
+/// the bubble's reading direction and wrap within its box: right-to-left
+/// columns for vertical (縦書き) text, left-to-right rows for horizontal.
 class _RegionOverlay extends StatelessWidget {
   const _RegionOverlay({
     required this.region,
     required this.repo,
     required this.onWordTap,
+    required this.vertical,
+    required this.fontSize,
   });
 
   final FuriganaRegion region;
   final VocabRepository repo;
   final void Function(FuriganaSegment) onWordTap;
+  final bool vertical;
+  final double fontSize;
 
   @override
   Widget build(BuildContext context) {
@@ -203,6 +226,17 @@ class _RegionOverlay extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
+    final words = <Widget>[
+      for (var i = 0; i < region.segments.length; i++)
+        FuriganaWord(
+          display: displays[i],
+          fontSize: fontSize,
+          onTap: region.segments[i].needsFurigana
+              ? () => onWordTap(region.segments[i])
+              : null,
+        ),
+    ];
+
     // A translucent panel behind the reading so the furigana + base text stay
     // legible over any artwork.
     return Container(
@@ -210,21 +244,19 @@ class _RegionOverlay extends StatelessWidget {
         color: Colors.black.withValues(alpha: 0.62),
         borderRadius: BorderRadius.circular(4),
       ),
-      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
-      child: FittedBox(
-        fit: BoxFit.scaleDown,
-        alignment: Alignment.topCenter,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (var i = 0; i < region.segments.length; i++)
-              FuriganaWord(
-                display: displays[i],
-                onTap: region.segments[i].needsFurigana
-                    ? () => onWordTap(region.segments[i])
-                    : null,
-              ),
-          ],
+      padding: const EdgeInsets.all(2),
+      alignment: Alignment.center,
+      child: ClipRect(
+        child: Wrap(
+          direction: vertical ? Axis.vertical : Axis.horizontal,
+          // rtl makes vertical text wrap into right-to-left columns.
+          textDirection: vertical ? TextDirection.rtl : TextDirection.ltr,
+          alignment: WrapAlignment.center,
+          runAlignment: WrapAlignment.center,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          spacing: vertical ? 2 : 3,
+          runSpacing: vertical ? 3 : 1,
+          children: words,
         ),
       ),
     );
