@@ -15,20 +15,22 @@ class FuriganaWord extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         if (display.reading != null)
-          Opacity(
-            opacity: 0.7,
-            child: Text(
-              display.reading!,
-              style: const TextStyle(
-                fontSize: 9,
-                height: 1.0,
-                color: Colors.redAccent,
-              ),
+          Text(
+            display.reading!,
+            style: const TextStyle(
+              fontSize: 13,
+              height: 1.05,
+              color: Colors.amberAccent,
+              fontWeight: FontWeight.w700,
             ),
           ),
         Text(
           display.baseText,
-          style: const TextStyle(fontSize: 16, height: 1.0),
+          style: const TextStyle(
+            fontSize: 20,
+            height: 1.05,
+            color: Colors.white,
+          ),
         ),
       ],
     );

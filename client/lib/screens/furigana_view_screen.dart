@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -16,60 +17,152 @@ import '../widgets/furigana_word.dart';
 
 /// Presentational interactive furigana view: original page image with a
 /// per-bubble furigana overlay. Non-destructive — the image is never modified.
-class FuriganaView extends ConsumerWidget {
-  const FuriganaView({super.key, required this.meta, required this.imageBytes});
+class FuriganaView extends ConsumerStatefulWidget {
+  const FuriganaView({
+    super.key,
+    required this.meta,
+    required this.imageBytes,
+    this.onPreviousPage,
+    this.onNextPage,
+    this.pageLabel,
+  });
 
   final FuriganaPageMeta meta;
   final Uint8List imageBytes;
 
+  /// Called when the reader over-scrolls past the top / bottom edge (or taps
+  /// the up / down buttons). Null disables that direction (at a boundary).
+  final VoidCallback? onPreviousPage;
+  final VoidCallback? onNextPage;
+
+  /// Shown in the app bar, e.g. "5 / 240".
+  final String? pageLabel;
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<FuriganaView> createState() => _FuriganaViewState();
+}
+
+class _FuriganaViewState extends ConsumerState<FuriganaView> {
+  // The page renders at full width and scrolls vertically. Over-scrolling past
+  // an edge accumulates here; once the user "insists" past the threshold we
+  // flip the page. Normal scrolling within the page resets it. Handled for
+  // both touch/trackpad drags (OverscrollNotification) and the mouse wheel
+  // (PointerScrollEvent) — the wheel does not reliably emit overscroll.
+  final _controller = ScrollController();
+  double _overscroll = 0;
+  static const double _pageFlipThreshold = 160;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _accumulate(double delta) {
+    _overscroll += delta; // >0 past the bottom, <0 past the top
+    if (_overscroll >= _pageFlipThreshold && widget.onNextPage != null) {
+      _overscroll = 0;
+      widget.onNextPage!();
+    } else if (_overscroll <= -_pageFlipThreshold &&
+        widget.onPreviousPage != null) {
+      _overscroll = 0;
+      widget.onPreviousPage!();
+    }
+  }
+
+  bool _onScroll(ScrollNotification n) {
+    if (n is OverscrollNotification) {
+      _accumulate(n.overscroll);
+    } else if (n is ScrollUpdateNotification || n is ScrollEndNotification) {
+      _overscroll = 0;
+    }
+    return false;
+  }
+
+  void _onPointerSignal(PointerSignalEvent e) {
+    if (e is! PointerScrollEvent || !_controller.hasClients) return;
+    final pos = _controller.position;
+    final dy = e.scrollDelta.dy;
+    if (dy > 0 && pos.pixels >= pos.maxScrollExtent) {
+      _accumulate(dy); // wheeling down at the bottom edge
+    } else if (dy < 0 && pos.pixels <= pos.minScrollExtent) {
+      _accumulate(dy); // wheeling up at the top edge
+    } else {
+      _overscroll = 0;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     // Rebuild when vocab changes.
     ref.watch(vocabRepositoryProvider);
     final repo = ref.read(vocabRepositoryProvider);
+    final meta = widget.meta;
 
     final aspect = (meta.imageWidth > 0 && meta.imageHeight > 0)
         ? meta.imageWidth / meta.imageHeight
         : 1.0;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Furigana')),
-      backgroundColor: Colors.black,
-      body: Center(
-        child: InteractiveViewer(
-          maxScale: 6,
-          child: AspectRatio(
-            aspectRatio: aspect,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final w = constraints.maxWidth;
-                final h = constraints.maxHeight;
-                return Stack(
-                  children: [
-                    Positioned.fill(
-                      child: Image.memory(imageBytes, fit: BoxFit.fill),
-                    ),
-                    for (final region in meta.regions)
-                      Positioned(
-                        left: region.bboxNorm[0] * w,
-                        top: region.bboxNorm[1] * h,
-                        width:
-                            (region.bboxNorm[2] - region.bboxNorm[0]) * w,
-                        height:
-                            (region.bboxNorm[3] - region.bboxNorm[1]) * h,
-                        child: _RegionOverlay(
-                          region: region,
-                          repo: repo,
-                          onWordTap: (seg) =>
-                              _openFocusPanel(context, repo, seg),
-                        ),
-                      ),
-                  ],
-                );
-              },
-            ),
+      appBar: AppBar(
+        title: Text(widget.pageLabel ?? 'Furigana'),
+        actions: [
+          IconButton(
+            tooltip: 'Previous page',
+            icon: const Icon(Icons.keyboard_arrow_up),
+            onPressed: widget.onPreviousPage,
           ),
-        ),
+          IconButton(
+            tooltip: 'Next page',
+            icon: const Icon(Icons.keyboard_arrow_down),
+            onPressed: widget.onNextPage,
+          ),
+        ],
+      ),
+      backgroundColor: Colors.black,
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final w = constraints.maxWidth;
+          final h = w / aspect; // full page width; taller pages scroll
+          return Listener(
+            onPointerSignal: _onPointerSignal,
+            child: NotificationListener<ScrollNotification>(
+              onNotification: _onScroll,
+              child: SingleChildScrollView(
+                controller: _controller,
+                physics: const AlwaysScrollableScrollPhysics(
+                  parent: ClampingScrollPhysics(),
+                ),
+                child: SizedBox(
+                  width: w,
+                  height: h,
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child:
+                            Image.memory(widget.imageBytes, fit: BoxFit.fill),
+                      ),
+                      for (final region in meta.regions)
+                        Positioned(
+                          left: region.bboxNorm[0] * w,
+                          top: region.bboxNorm[1] * h,
+                          width: (region.bboxNorm[2] - region.bboxNorm[0]) * w,
+                          height:
+                              (region.bboxNorm[3] - region.bboxNorm[1]) * h,
+                          child: _RegionOverlay(
+                            region: region,
+                            repo: repo,
+                            onWordTap: (seg) =>
+                                _openFocusPanel(context, repo, seg),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -100,18 +193,27 @@ class _RegionOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FittedBox(
-      fit: BoxFit.scaleDown,
-      alignment: Alignment.topCenter,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (final seg in region.segments)
-            FuriganaWord(
-              display: resolveFurigana(seg, repo.entryFor(seg.text)),
-              onTap: seg.needsFurigana ? () => onWordTap(seg) : null,
-            ),
-        ],
+    // A translucent panel behind the reading so the furigana + base text stay
+    // legible over any artwork.
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.62),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        alignment: Alignment.topCenter,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final seg in region.segments)
+              FuriganaWord(
+                display: resolveFurigana(seg, repo.entryFor(seg.text)),
+                onTap: seg.needsFurigana ? () => onWordTap(seg) : null,
+              ),
+          ],
+        ),
       ),
     );
   }

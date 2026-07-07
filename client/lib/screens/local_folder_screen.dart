@@ -104,9 +104,9 @@ class _LocalFolderScreenState extends ConsumerState<LocalFolderScreen> {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => LocalFuriganaLoader(
-          file: _pages[index],
+          files: _pages,
+          index: index,
           title: _folderName,
-          pageNumber: '${index + 1}',
         ),
       ),
     );
@@ -174,14 +174,14 @@ class _LocalFolderScreenState extends ConsumerState<LocalFolderScreen> {
 class LocalFuriganaLoader extends ConsumerStatefulWidget {
   const LocalFuriganaLoader({
     super.key,
-    required this.file,
+    required this.files,
+    required this.index,
     required this.title,
-    required this.pageNumber,
   });
 
-  final File file;
+  final List<File> files;
+  final int index;
   final String title;
-  final String pageNumber;
 
   @override
   ConsumerState<LocalFuriganaLoader> createState() =>
@@ -189,6 +189,7 @@ class LocalFuriganaLoader extends ConsumerStatefulWidget {
 }
 
 class _LocalFuriganaLoaderState extends ConsumerState<LocalFuriganaLoader> {
+  late int _index;
   Uint8List? _bytes;
   FuriganaPageMeta? _meta;
   String? _error;
@@ -197,6 +198,18 @@ class _LocalFuriganaLoaderState extends ConsumerState<LocalFuriganaLoader> {
   @override
   void initState() {
     super.initState();
+    _index = widget.index;
+    _process();
+  }
+
+  void _goTo(int i) {
+    if (i < 0 || i >= widget.files.length) return;
+    setState(() {
+      _index = i;
+      _meta = null;
+      _bytes = null;
+      _error = null;
+    });
     _process();
   }
 
@@ -206,7 +219,7 @@ class _LocalFuriganaLoaderState extends ConsumerState<LocalFuriganaLoader> {
       _status = 'Reading image…';
     });
     try {
-      final bytes = await widget.file.readAsBytes();
+      final bytes = await widget.files[_index].readAsBytes();
       _bytes = bytes;
       final settings = ref.read(settingsProvider);
       final api = ref.read(apiServiceProvider);
@@ -217,7 +230,7 @@ class _LocalFuriganaLoaderState extends ConsumerState<LocalFuriganaLoader> {
         imageBytes: bytes,
         pipeline: 'manga_furigana',
         title: widget.title.isEmpty ? 'local' : widget.title,
-        pageNumber: widget.pageNumber,
+        pageNumber: '${_index + 1}',
         priority: 'high',
       );
 
@@ -253,9 +266,27 @@ class _LocalFuriganaLoaderState extends ConsumerState<LocalFuriganaLoader> {
 
   @override
   Widget build(BuildContext context) {
+    final label = '${_index + 1} / ${widget.files.length}';
+    final onPrev = _index > 0 ? () => _goTo(_index - 1) : null;
+    final onNext =
+        _index < widget.files.length - 1 ? () => _goTo(_index + 1) : null;
+
+    List<Widget> navActions() => [
+          IconButton(
+            tooltip: 'Previous page',
+            icon: const Icon(Icons.keyboard_arrow_up),
+            onPressed: onPrev,
+          ),
+          IconButton(
+            tooltip: 'Next page',
+            icon: const Icon(Icons.keyboard_arrow_down),
+            onPressed: onNext,
+          ),
+        ];
+
     if (_error != null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Furigana')),
+        appBar: AppBar(title: Text(label), actions: navActions()),
         body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -278,7 +309,7 @@ class _LocalFuriganaLoaderState extends ConsumerState<LocalFuriganaLoader> {
     final bytes = _bytes;
     if (meta == null || bytes == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Furigana')),
+        appBar: AppBar(title: Text(label), actions: navActions()),
         body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -291,6 +322,12 @@ class _LocalFuriganaLoaderState extends ConsumerState<LocalFuriganaLoader> {
         ),
       );
     }
-    return FuriganaView(meta: meta, imageBytes: bytes);
+    return FuriganaView(
+      meta: meta,
+      imageBytes: bytes,
+      pageLabel: label,
+      onPreviousPage: onPrev,
+      onNextPage: onNext,
+    );
   }
 }
