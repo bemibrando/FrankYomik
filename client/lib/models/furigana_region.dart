@@ -86,7 +86,12 @@ class FuriganaPageMeta {
     if (decoded is! Map) {
       return const FuriganaPageMeta(imageWidth: 0, imageHeight: 0, regions: []);
     }
-    final image = decoded['image'];
+    // The cache meta endpoint wraps the page under "metadata"
+    // ({"content_hash":..., "metadata":{"image":..., "regions":[...]}}).
+    // Accept either that envelope or a bare {"image":..., "regions":[...]}.
+    final Map root =
+        decoded['metadata'] is Map ? decoded['metadata'] as Map : decoded;
+    final image = root['image'];
     final width = (image is Map && image['width'] is num)
         ? (image['width'] as num).toInt()
         : 0;
@@ -94,7 +99,7 @@ class FuriganaPageMeta {
         ? (image['height'] as num).toInt()
         : 0;
     final regions = <FuriganaRegion>[];
-    final rawRegions = decoded['regions'];
+    final rawRegions = root['regions'];
     if (rawRegions is List) {
       for (final r in rawRegions) {
         if (r is Map) {

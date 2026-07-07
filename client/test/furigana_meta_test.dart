@@ -78,5 +78,29 @@ void main() {
       expect(meta.imageHeight, 0);
       expect(meta.regions, isEmpty);
     });
+
+    test('unwraps the cache endpoint "metadata" envelope', () {
+      // Shape returned by GET /api/v1/cache/by-hash/:pipeline/:hash/meta.
+      const json = '''
+      {
+        "content_hash": "abc",
+        "render_hash": "def",
+        "image_stale": false,
+        "metadata": {
+          "image": {"width": 844, "height": 1200},
+          "regions": [
+            {"id": "r1", "kind": "bubble", "bbox_norm": [0.1, 0.2, 0.3, 0.5],
+             "transformed": {"kind": "furigana_segments",
+               "value": [{"text": "一人", "furigana": "ひとり",
+                          "needs_furigana": true}]}}
+          ]
+        }
+      }''';
+      final meta = FuriganaPageMeta.parse(json);
+      expect(meta.imageWidth, 844);
+      expect(meta.imageHeight, 1200);
+      expect(meta.regions.length, 1);
+      expect(meta.regions.first.segments.first.furigana, 'ひとり');
+    });
   });
 }
