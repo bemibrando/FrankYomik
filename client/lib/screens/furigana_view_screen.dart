@@ -175,11 +175,11 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
     final wrapExtent = (vertical ? baseH : baseW) * 1.1;
     final cx = (region.bboxNorm[0] + region.bboxNorm[2]) / 2 * w;
     final cy = (region.bboxNorm[1] + region.bboxNorm[3]) / 2 * h;
-    return Positioned(
-      left: cx,
-      top: cy,
-      child: FractionalTranslation(
-        translation: const Offset(-0.5, -0.5), // center the box on the bubble
+    // Center the box on the bubble, but keep it within the page (with a
+    // margin) and never larger than the page.
+    return Positioned.fill(
+      child: CustomSingleChildLayout(
+        delegate: _BubbleBoxLayout(center: Offset(cx, cy), margin: 6),
         child: _RegionOverlay(
           region: region,
           repo: repo,
@@ -357,6 +357,44 @@ class _VerticalRuby extends StatelessWidget {
       ],
     );
   }
+}
+
+/// Lays out a furigana box centered on its bubble, but constrained to fit
+/// within the page (minus [margin]) and clamped so it never spills off the
+/// edge — so an expanded box near a border stays on the page.
+class _BubbleBoxLayout extends SingleChildLayoutDelegate {
+  const _BubbleBoxLayout({required this.center, required this.margin});
+
+  final Offset center;
+  final double margin;
+
+  @override
+  BoxConstraints getConstraintsForChild(BoxConstraints constraints) {
+    final maxW = constraints.maxWidth - 2 * margin;
+    final maxH = constraints.maxHeight - 2 * margin;
+    return BoxConstraints(
+      maxWidth: maxW < 0 ? 0 : maxW,
+      maxHeight: maxH < 0 ? 0 : maxH,
+    );
+  }
+
+  @override
+  Offset getPositionForChild(Size size, Size childSize) {
+    double axis(double desired, double extent, double child) {
+      final maxPos = extent - child - margin;
+      if (maxPos <= margin) return margin;
+      return desired.clamp(margin, maxPos);
+    }
+
+    return Offset(
+      axis(center.dx - childSize.width / 2, size.width, childSize.width),
+      axis(center.dy - childSize.height / 2, size.height, childSize.height),
+    );
+  }
+
+  @override
+  bool shouldRelayout(_BubbleBoxLayout old) =>
+      center != old.center || margin != old.margin;
 }
 
 /// Bottom-sheet controls for a single word: reading, override, known toggle.
