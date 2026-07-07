@@ -12,6 +12,7 @@ cache/
 
 # Webtoon downloaded images
 webtoon_data/
+docs/adult/
 
 # IDE
 .vscode/
