@@ -193,6 +193,16 @@ class _RegionOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final displays = [
+      for (final seg in region.segments)
+        resolveFurigana(seg, repo.entryFor(seg.text)),
+    ];
+    // Once every furigana word in the bubble is known there is nothing left to
+    // read, so hide the whole overlay and let the original bubble show through.
+    if (!displays.any((d) => d.reading != null)) {
+      return const SizedBox.shrink();
+    }
+
     // A translucent panel behind the reading so the furigana + base text stay
     // legible over any artwork.
     return Container(
@@ -207,10 +217,12 @@ class _RegionOverlay extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            for (final seg in region.segments)
+            for (var i = 0; i < region.segments.length; i++)
               FuriganaWord(
-                display: resolveFurigana(seg, repo.entryFor(seg.text)),
-                onTap: seg.needsFurigana ? () => onWordTap(seg) : null,
+                display: displays[i],
+                onTap: region.segments[i].needsFurigana
+                    ? () => onWordTap(region.segments[i])
+                    : null,
               ),
           ],
         ),

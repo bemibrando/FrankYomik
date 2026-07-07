@@ -79,8 +79,10 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('vocab-mark-known')));
     await tester.pumpAndSettle();
 
-    // Furigana for that word is now hidden.
+    // Every furigana word in the bubble is now known, so the whole overlay
+    // is hidden (reading and base text both gone).
     expect(find.text('たべ'), findsNothing);
+    expect(find.text('食べ'), findsNothing);
     expect(repo.entryFor('食べ')!.known, true);
   });
 }
