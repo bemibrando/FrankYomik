@@ -51,7 +51,10 @@ class LocalFolderScreen extends ConsumerStatefulWidget {
 }
 
 class _LocalFolderScreenState extends ConsumerState<LocalFolderScreen> {
-  final _pathController = TextEditingController();
+  // Pre-fill from FRANK_FOLDER when set (e.g. the Docker mount /data/adult);
+  // empty on a plain desktop build so the user types their own path.
+  final _pathController =
+      TextEditingController(text: Platform.environment['FRANK_FOLDER'] ?? '');
   List<File> _pages = [];
   String? _error;
   String _folderName = '';
