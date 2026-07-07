@@ -163,31 +163,31 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
     // Vertical (縦書き) when the bubble is taller than wide; horizontal
     // otherwise (e.g. wide caption/title text).
     final vertical = baseH >= baseW;
-    // Give the overlay box 10% more room than the detected bubble so the
-    // furigana + text has space and isn't clipped, keeping it centered.
-    final rw = baseW * 1.1;
-    final rh = baseH * 1.1;
     // Scale the original font to the on-screen page so the overlay matches
-    // the source size and wraps like it.
+    // the source size (no fit-to-box cap — the box grows to show everything).
     final scale =
         widget.meta.imageHeight > 0 ? h / widget.meta.imageHeight : 1.0;
-    final rawFont = (region.sourceFontSize ?? 16.0) * scale;
-    // Cap so a bubble's text can't overflow its box (which would clip tap
-    // targets): horizontal rows are ~1.7x font tall, vertical columns ~1.5x
-    // font wide.
-    final cap = vertical ? rw / 1.5 : rh / 1.7;
-    final fontSize = rawFont.clamp(9.0, cap < 9.0 ? 9.0 : cap).toDouble();
+    final fontSize =
+        ((region.sourceFontSize ?? 16.0) * scale).clamp(9.0, 96.0).toDouble();
+    // Bound the wrap along the reading axis (to a slightly padded bubble) so it
+    // wraps like the original; the box then grows freely along the other axis
+    // to show every character, and is centered on the bubble.
+    final wrapExtent = (vertical ? baseH : baseW) * 1.1;
+    final cx = (region.bboxNorm[0] + region.bboxNorm[2]) / 2 * w;
+    final cy = (region.bboxNorm[1] + region.bboxNorm[3]) / 2 * h;
     return Positioned(
-      left: region.bboxNorm[0] * w - baseW * 0.05,
-      top: region.bboxNorm[1] * h - baseH * 0.05,
-      width: rw,
-      height: rh,
-      child: _RegionOverlay(
-        region: region,
-        repo: repo,
-        vertical: vertical,
-        fontSize: fontSize,
-        onWordTap: (seg) => _openFocusPanel(context, repo, seg),
+      left: cx,
+      top: cy,
+      child: FractionalTranslation(
+        translation: const Offset(-0.5, -0.5), // center the box on the bubble
+        child: _RegionOverlay(
+          region: region,
+          repo: repo,
+          vertical: vertical,
+          fontSize: fontSize,
+          wrapExtent: wrapExtent,
+          onWordTap: (seg) => _openFocusPanel(context, repo, seg),
+        ),
       ),
     );
   }
@@ -214,6 +214,7 @@ class _RegionOverlay extends StatelessWidget {
     required this.onWordTap,
     required this.vertical,
     required this.fontSize,
+    required this.wrapExtent,
   });
 
   final FuriganaRegion region;
@@ -221,6 +222,10 @@ class _RegionOverlay extends StatelessWidget {
   final void Function(FuriganaSegment) onWordTap;
   final bool vertical;
   final double fontSize;
+
+  /// Max size along the reading axis before wrapping (columns for vertical,
+  /// rows for horizontal). The box grows freely on the other axis.
+  final double wrapExtent;
 
   @override
   Widget build(BuildContext context) {
@@ -288,15 +293,20 @@ class _RegionOverlay extends StatelessWidget {
     }
 
     // A translucent panel behind the reading so the furigana + base text stay
-    // legible over any artwork.
+    // legible over any artwork. The panel sizes to its content; the wrap is
+    // bounded only along the reading axis so the box grows to show everything.
     return Container(
       decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.62),
+        color: Colors.black.withValues(alpha: 0.78),
         borderRadius: BorderRadius.circular(4),
       ),
-      padding: const EdgeInsets.all(2),
-      alignment: Alignment.center,
-      child: ClipRect(child: content),
+      padding: const EdgeInsets.all(3),
+      child: ConstrainedBox(
+        constraints: vertical
+            ? BoxConstraints(maxHeight: wrapExtent)
+            : BoxConstraints(maxWidth: wrapExtent),
+        child: content,
+      ),
     );
   }
 }
