@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import '../furigana/overlay_policy.dart';
 import '../providers/connection_provider.dart';
 import '../providers/jobs_provider.dart';
 import '../providers/settings_provider.dart';
@@ -17,6 +18,7 @@ import '../webview/platform/app_webview.dart';
 import '../webview/platform/app_webview_controller.dart';
 import '../webview/strategies/kindle_strategy.dart';
 import '../webview/strategies/naver_webtoon_strategy.dart';
+import 'furigana_view_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Anti-bot JS injected at document-start to mask WebView fingerprints.
@@ -147,6 +149,7 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      floatingActionButton: _buildFuriganaFab(),
       body: SafeArea(
         bottom: false,
         child: AppWebView(
@@ -918,9 +921,38 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen>
     _completionListeners[spreadPageId] = sub;
   }
 
+  Widget? _buildFuriganaFab() {
+    final pageId = _currentKindlePageId;
+    if (pageId == null) return null;
+    final job = ref.watch(jobsProvider)[pageId];
+    if (job == null ||
+        !job.isComplete ||
+        job.pipeline != 'manga_furigana' ||
+        job.originalImage == null) {
+      return null;
+    }
+    return FloatingActionButton.extended(
+      onPressed: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => FuriganaPageLoader(job: job),
+          ),
+        );
+      },
+      icon: const Icon(Icons.menu_book),
+      label: const Text('Furigana'),
+    );
+  }
+
   Future<void> _applyOverlay(String pageId, Uint8List imageBytes) async {
     final controller = _webController;
     if (controller == null) return;
+
+    // Furigana pages are read in the interactive viewer, not overwritten in Kindle.
+    final job = ref.read(jobsProvider)[pageId];
+    if (!shouldApplyBurnedOverlay(job?.pipeline)) {
+      return;
+    }
 
     if (_jsBridge.activeStrategy?.siteName == 'webtoon') {
       // Look up the original src URL from detected page info

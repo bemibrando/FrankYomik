@@ -12,8 +12,8 @@ Base commit (before Task 1): ac747f5
 - Task 5: complete (commit 36b9ff4, 4/4 tests pass in Docker, controller review clean)
 - Task 6: complete (commit 50b2e93, full suite 80/80 pass in Docker, review clean)
 - Task 7: complete (commit 704725e, 3/3 widget tests pass in Docker, review clean)
-- Task 8: code committed (d7b20fa); tests fixed post-commit, 2/2 pass + full suite 85/85 in warm Docker container, analyze clean. Fix NOT yet committed — awaiting review.
-- Task 9: pending
+- Task 8: complete (code d7b20fa; test/widget fix e00836d). 2/2 tests pass, full suite 85/85, analyze clean.
+- Task 9: complete (reader entry FAB + burned-overlay suppression). Full suite 85/85, full-project analyze clean, no server/ changes in branch. No new test file (pure wiring over Task 5's tested logic, per plan).
 
 ## Minor findings (for final review triage)
 - Task 8 tests hung (not env): real dart:io I/O (`Directory.systemTemp.createTemp`, `repo.load()`) ran directly in the `testWidgets` fake-async zone, so the awaited futures never completed. Fixed by wrapping setup I/O in `tester.runAsync()`.
