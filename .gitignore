@@ -63,3 +63,4 @@ server/tests/ab_*_results.json
 
 # Extension packaged artifacts
 extension/dist/
+.frank-appdata/

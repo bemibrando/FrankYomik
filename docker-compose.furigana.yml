@@ -1,0 +1,101 @@
+# Lean furigana-only stack (no Ollama/LLM, no cloudflared).
+# manga_furigana needs only OCR + bubble detection + MeCab readings.
+# GPU-enabled worker (RT-DETR + manga-ocr). Run:
+#   docker compose -p frank -f docker-compose.furigana.yml up -d --build
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  init-perms:
+    image: busybox
+    volumes:
+      - ./cache:/data/cache
+    command: ["sh", "-c", "chown -R ${APP_UID:-1026}:${APP_GID:-1026} /data/cache"]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+      args:
+        APP_UID: ${APP_UID:-1026}
+        APP_GID: ${APP_GID:-1026}
+    user: "${APP_UID:-1026}:${APP_GID:-1026}"
+    ports:
+      - "8080:8080"
+    environment:
+      REDIS_URL: redis://redis:6379
+      AUTH_TOKEN: ${AUTH_TOKEN:-mysecrettoken}
+      CACHE_DIR: /data/cache
+    volumes:
+      - ./cache:/data/cache
+    depends_on:
+      redis:
+        condition: service_healthy
+      init-perms:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+      args:
+        APP_UID: ${APP_UID:-1026}
+        APP_GID: ${APP_GID:-1026}
+    environment:
+      OLLAMA_BASE_URL: http://localhost:11434  # unused by furigana; set to satisfy imports
+      APP_UID: ${APP_UID:-1026}
+      APP_GID: ${APP_GID:-1026}
+    command: ["--pipeline", "manga", "--redis-url", "redis://redis:6379"]
+    volumes:
+      - ./cache:/app/server/cache
+      - mangaocr-cache:/home/worker/.cache/manga_ocr
+      - huggingface-cache:/home/worker/.cache/huggingface
+      - easyocr-cache:/home/worker/.EasyOCR
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    depends_on:
+      redis:
+        condition: service_healthy
+      init-perms:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # Flutter client as a Linux desktop app, viewable in a browser via noVNC.
+  gui:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.gui
+    ports:
+      - "6080:6080"
+    environment:
+      FRANK_SERVER_URL: http://api:8080
+      FRANK_AUTH_TOKEN: ${AUTH_TOKEN:-mysecrettoken}
+    volumes:
+      - ./docs/adult:/data/adult:ro   # your local manga pages -> /data/adult
+      - ./.frank-appdata:/appdata      # persisted vocab + settings
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+  mangaocr-cache:
+  huggingface-cache:
+  easyocr-cache:

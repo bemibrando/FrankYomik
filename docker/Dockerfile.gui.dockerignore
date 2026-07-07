@@ -1,0 +1,20 @@
+# Build context for the GUI image: the Flutter client only.
+# (Overrides the repo-root .dockerignore, which excludes client/.)
+.git/
+server/
+docs/
+tests/
+output/
+.frank-appdata/
+.claude/
+.vscode/
+.idea/
+client/build/
+client/.dart_tool/
+client/linux/flutter/ephemeral/
+client/android/
+client/ios/
+client/macos/
+client/windows/
+client/web/
+**/__pycache__/
