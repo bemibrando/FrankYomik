@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../furigana/furigana_resolver.dart';
+import '../furigana/romaji_kana.dart';
 import '../models/furigana_region.dart';
 import '../models/page_job.dart';
 import '../providers/connection_provider.dart' show apiServiceProvider;
@@ -456,7 +457,20 @@ class _FocusPanelState extends State<_FocusPanel> {
             controller: _controller,
             decoration: const InputDecoration(
               labelText: 'Reading (your override)',
+              helperText: 'Type romaji — it becomes kana (e.g. tabe → たべ)',
             ),
+            // Convert romaji to hiragana as you type, so a reading can be
+            // entered without a system IME.
+            onChanged: (value) {
+              final converted = romajiToHiragana(value);
+              if (converted != value) {
+                _controller.value = TextEditingValue(
+                  text: converted,
+                  selection:
+                      TextSelection.collapsed(offset: converted.length),
+                );
+              }
+            },
             onSubmitted: (value) {
               // Update in memory + notify synchronously, then close; the disk
               // write persists in the background (best-effort in the repo).
