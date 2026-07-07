@@ -158,11 +158,15 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
   /// Positions one bubble's overlay and derives its orientation + text size.
   Widget _positionedOverlay(BuildContext context, FuriganaRegion region,
       double w, double h, VocabRepository repo) {
-    final rw = (region.bboxNorm[2] - region.bboxNorm[0]) * w;
-    final rh = (region.bboxNorm[3] - region.bboxNorm[1]) * h;
+    final baseW = (region.bboxNorm[2] - region.bboxNorm[0]) * w;
+    final baseH = (region.bboxNorm[3] - region.bboxNorm[1]) * h;
     // Vertical (縦書き) when the bubble is taller than wide; horizontal
     // otherwise (e.g. wide caption/title text).
-    final vertical = rh >= rw;
+    final vertical = baseH >= baseW;
+    // Give the overlay box 10% more room than the detected bubble so the
+    // furigana + text has space and isn't clipped, keeping it centered.
+    final rw = baseW * 1.1;
+    final rh = baseH * 1.1;
     // Scale the original font to the on-screen page so the overlay matches
     // the source size and wraps like it.
     final scale =
@@ -174,8 +178,8 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
     final cap = vertical ? rw / 1.5 : rh / 1.7;
     final fontSize = rawFont.clamp(9.0, cap < 9.0 ? 9.0 : cap).toDouble();
     return Positioned(
-      left: region.bboxNorm[0] * w,
-      top: region.bboxNorm[1] * h,
+      left: region.bboxNorm[0] * w - baseW * 0.05,
+      top: region.bboxNorm[1] * h - baseH * 0.05,
       width: rw,
       height: rh,
       child: _RegionOverlay(
@@ -255,7 +259,10 @@ class _RegionOverlay extends StatelessWidget {
         textDirection: TextDirection.rtl, // columns run right-to-left
         alignment: WrapAlignment.start,
         runAlignment: WrapAlignment.center,
-        crossAxisAlignment: WrapCrossAlignment.start,
+        // Columns run right-to-left, so "end" is the left edge — this keeps the
+        // base characters left-aligned in a straight line while the furigana
+        // sits to their right.
+        crossAxisAlignment: WrapCrossAlignment.end,
         spacing: 1,
         runSpacing: 4,
         children: units,
