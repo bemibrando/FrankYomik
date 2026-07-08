@@ -53,22 +53,21 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
   double _overscroll = 0;
   static const double _pageFlipThreshold = 160;
 
-  // Bubbles the reader double-tapped to hide (reset when the page changes).
-  final Set<String> _hiddenRegions = {};
+  // Per-bubble manual show/hide from double-tap. No entry = follow the default
+  // (shown when the bubble has furigana to read). Reset when the page changes.
+  final Map<String, bool> _override = {};
 
   @override
   void didUpdateWidget(covariant FuriganaView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(oldWidget.meta, widget.meta)) {
-      _hiddenRegions.clear();
+      _override.clear();
       _overscroll = 0;
     }
   }
 
-  void _toggleRegion(String id) {
-    setState(() {
-      if (!_hiddenRegions.add(id)) _hiddenRegions.remove(id);
-    });
+  void _setRegionShown(String id, bool shown) {
+    setState(() => _override[id] = shown);
   }
 
   @override
@@ -182,14 +181,14 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
     final baseW = (region.bboxNorm[2] - region.bboxNorm[0]) * w;
     final baseH = (region.bboxNorm[3] - region.bboxNorm[1]) * h;
 
-    // Nothing to read (every word known) — no overlay, no tap target.
+    // Shown by default when there's something to read; a double-tap overrides
+    // that either way — so even an all-known bubble can be brought back.
     final hasFurigana = region.segments
         .any((s) => resolveFurigana(s, repo.entryFor(s.text)).reading != null);
-    if (!hasFurigana) return const SizedBox.shrink();
+    final shown = _override[region.id] ?? hasFurigana;
 
-    // Double-tapped hidden: a transparent target over the bubble so a second
-    // double-tap reveals it again.
-    if (_hiddenRegions.contains(region.id)) {
+    if (!shown) {
+      // Transparent target over the bubble so a double-tap reveals it.
       return Positioned(
         left: region.bboxNorm[0] * w,
         top: region.bboxNorm[1] * h,
@@ -197,7 +196,7 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
         height: baseH,
         child: GestureDetector(
           behavior: HitTestBehavior.translucent,
-          onDoubleTap: () => _toggleRegion(region.id),
+          onDoubleTap: () => _setRegionShown(region.id, true),
         ),
       );
     }
@@ -226,7 +225,7 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
         // words (mark-known / override).
         child: GestureDetector(
           behavior: HitTestBehavior.deferToChild,
-          onDoubleTap: () => _toggleRegion(region.id),
+          onDoubleTap: () => _setRegionShown(region.id, false),
           child: _RegionOverlay(
             region: region,
             repo: repo,
@@ -277,15 +276,12 @@ class _RegionOverlay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Visibility (including auto-hide when every word is known) is decided by
+    // the caller; here we just render the bubble's words + readings.
     final displays = [
       for (final seg in region.segments)
         resolveFurigana(seg, repo.entryFor(seg.text)),
     ];
-    // Once every furigana word in the bubble is known there is nothing left to
-    // read, so hide the whole overlay and let the original bubble show through.
-    if (!displays.any((d) => d.reading != null)) {
-      return const SizedBox.shrink();
-    }
 
     final Widget content;
     if (vertical) {
