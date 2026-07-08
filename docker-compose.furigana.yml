@@ -88,6 +88,7 @@ services:
       FRANK_SERVER_URL: http://api:8080
       FRANK_AUTH_TOKEN: ${AUTH_TOKEN:-mysecrettoken}
       FRANK_FOLDER: /data/adult   # pre-fills the Local folder path field
+      FRANK_FULLSCREEN: "1"        # fill the whole virtual display (no desktop margin)
     volumes:
       - ./docs/adult:/data/adult:ro   # your local manga pages -> /data/adult
       - ./.frank-appdata:/appdata      # persisted vocab + settings

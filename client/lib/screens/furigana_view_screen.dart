@@ -89,6 +89,9 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
   }
 
   bool _onScroll(ScrollNotification n) {
+    // Only the vertical page scroll drives page flipping; horizontal panning of
+    // a wide page must not accumulate toward a flip.
+    if (n.metrics.axis != Axis.vertical) return false;
     if (n is OverscrollNotification) {
       _accumulate(n.overscroll);
     } else if (n is ScrollUpdateNotification || n is ScrollEndNotification) {
@@ -141,28 +144,50 @@ class _FuriganaViewState extends ConsumerState<FuriganaView> {
       body: LayoutBuilder(
         builder: (context, constraints) {
           final w = constraints.maxWidth;
-          final h = w / aspect; // full page width; taller pages scroll
+          final vh = constraints.maxHeight;
+          // The page fills the window width and taller pages scroll vertically.
+          // But a wide / short page fit to width leaves black space below it, so
+          // if width-fit would be shorter than the window, scale it up to fill
+          // the window height instead. That makes it wider than the window, so
+          // it can be panned horizontally — no black bars, no cropping, no
+          // aspect distortion.
+          var pageW = w;
+          var pageH = w / aspect;
+          if (pageH < vh) {
+            pageH = vh;
+            pageW = vh * aspect;
+          }
+          final page = SizedBox(
+            width: pageW,
+            height: pageH,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: Image.memory(widget.imageBytes, fit: BoxFit.fill),
+                ),
+                for (final region in meta.regions)
+                  _positionedOverlay(context, region, pageW, pageH, repo),
+              ],
+            ),
+          );
           return Listener(
             onPointerSignal: _onPointerSignal,
             child: NotificationListener<ScrollNotification>(
               onNotification: _onScroll,
-              child: SingleChildScrollView(
+              child: Scrollbar(
                 controller: _controller,
-                physics: const AlwaysScrollableScrollPhysics(
-                  parent: ClampingScrollPhysics(),
-                ),
-                child: SizedBox(
-                  width: w,
-                  height: h,
-                  child: Stack(
-                    children: [
-                      Positioned.fill(
-                        child:
-                            Image.memory(widget.imageBytes, fit: BoxFit.fill),
-                      ),
-                      for (final region in meta.regions)
-                        _positionedOverlay(context, region, w, h, repo),
-                    ],
+                thumbVisibility: true,
+                child: SingleChildScrollView(
+                  controller: _controller,
+                  physics: const AlwaysScrollableScrollPhysics(
+                    parent: ClampingScrollPhysics(),
+                  ),
+                  // Horizontal pan for the overflow when a page is scaled up to
+                  // fill the window height (wider than the viewport).
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    physics: const ClampingScrollPhysics(),
+                    child: page,
                   ),
                 ),
               ),

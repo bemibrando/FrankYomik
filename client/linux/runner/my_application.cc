@@ -38,6 +38,13 @@ static void my_application_activate(GApplication* application) {
 
   gtk_window_set_default_size(window, 1280, 720);
 
+  // In the Docker/noVNC kiosk the window must fill the virtual display,
+  // otherwise the desktop background shows around a fixed-size window. Gated by
+  // an env var so a native `flutter run -d linux` is not forced fullscreen.
+  if (g_getenv("FRANK_FULLSCREEN") != nullptr) {
+    gtk_window_fullscreen(window);
+  }
+
   g_autoptr(FlDartProject) project = fl_dart_project_new();
   fl_dart_project_set_dart_entrypoint_arguments(
       project, self->dart_entrypoint_arguments);
