@@ -214,6 +214,28 @@ flutter build apk --release
 
 The client defaults to `http://localhost:8080`. Configure the server URL and auth token in the Settings screen.
 
+## Read a Local Folder with Furigana (Docker, no Kindle)
+
+Read your own manga raws (e.g. `docs/adult/`) with interactive furigana entirely in Docker — no Kindle, no local Flutter/Go/Python toolchain. This runs a lean, **furigana-only** stack (no Ollama/LLM: furigana needs only bubble detection + OCR + MeCab readings) plus the Flutter client as a Linux desktop app you view in your browser via noVNC.
+
+Requirements: Docker with an NVIDIA GPU (Docker Desktop GPU support) and `make`.
+
+```bash
+# Configure the environment — build all images (server + GUI). Run once.
+make setup
+
+# Run the app — starts redis + API + GPU worker + GUI, then:
+make run
+```
+
+Open `http://localhost:6080/vnc.html` → **Local folder (furigana)** → enter `/data/adult` → tap a page. The page is submitted to the furigana pipeline, annotated on the GPU, and shown in the interactive viewer: tap a word to mark it known (its furigana hides) or override the reading.
+
+- **Read your own manga**: drop images into `docs/adult/` (mounted read-only at `/data/adult`), or edit the `gui` service mount in `docker-compose.furigana.yml`.
+- **Persistence**: known words and settings are saved to `./.frank-appdata` (survives restarts).
+- **Other commands**: `make logs` (follow the worker / model loading), `make ps`, `make down`, `make clean`.
+
+The stack is defined in `docker-compose.furigana.yml`; the GUI image is built by `docker/Dockerfile.gui`.
+
 ## Chromium Extension
 
 The desktop extension is the lightest way to use Frank Yomik directly on the Kindle Japan reader and Naver Webtoon sites. It supports:

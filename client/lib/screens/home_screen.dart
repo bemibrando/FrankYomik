@@ -7,6 +7,7 @@ import '../widgets/connection_banner.dart';
 import 'reader_screen.dart';
 import 'settings_screen.dart';
 import 'jobs_screen.dart';
+import 'local_folder_screen.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -107,6 +108,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   const SizedBox(height: 12),
+                  // Local folder (desktop): read your own manga raws with furigana
+                  Card(
+                    child: ListTile(
+                      leading: const Icon(Icons.folder_open, size: 32),
+                      title: const Text('Local folder (furigana)'),
+                      subtitle:
+                          const Text('Read local manga pages with furigana'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (_) => const LocalFolderScreen()),
+                      ),
+                    ),
+                  ),
                   // Site cards
                   ...SiteConfig.sites.map((site) => Card(
                         child: ListTile(

@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import '../models/server_settings.dart';
+import '../models/furigana_region.dart';
 
 /// REST client for the Frank API server.
 ///
@@ -112,6 +113,35 @@ class ApiService {
       );
     }
     return response.bodyBytes;
+  }
+
+  /// Build the relative meta endpoint path for a cached page.
+  static String metaPath(String pipeline, String sourceHash) {
+    final p = Uri.encodeComponent(pipeline);
+    final h = Uri.encodeComponent(sourceHash);
+    return '/api/v1/cache/by-hash/$p/$h/meta';
+  }
+
+  /// Fetch and parse furigana region metadata for a cached page.
+  Future<FuriganaPageMeta> fetchMeta({
+    required ServerSettings settings,
+    required String metaUrl,
+  }) async {
+    final uri = metaUrl.startsWith('http')
+        ? Uri.parse(metaUrl)
+        : Uri.parse('${settings.serverUrl}$metaUrl');
+    final response = await _client
+        .get(uri, headers: _headers(settings))
+        .timeout(const Duration(seconds: 15));
+
+    if (response.statusCode != 200) {
+      throw ApiException(
+        'Meta fetch failed (${response.statusCode})',
+        statusCode: response.statusCode,
+        retryable: response.statusCode >= 500,
+      );
+    }
+    return FuriganaPageMeta.parse(response.body);
   }
 
   /// Check server health (no auth required).
